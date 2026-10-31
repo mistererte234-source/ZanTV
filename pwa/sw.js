@@ -1,22 +1,33 @@
-/* Service worker ZanTV.
+/* Service worker ZanTV v1.6.0.
    - Halaman, CSS, dan JS: ambil dari jaringan dulu (selalu versi terbaru), cadangan dari cache saat offline.
    - Pustaka di /vendor/ (nama file berversi): dari cache dulu.
    - /api/ dan stream video tidak pernah disimpan. */
-var VERSION = 'zantv-v1.5.0';
-var SHELL = ['./', './index.html', './style.css?v=1.5.0', './app.js?v=1.5.0', './zan-sig.js?v=1.5.0',
-  './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/logo.jpg'];
+var VERSION = 'zantv-v1.6.0';
+var SHELL = [
+  './',
+  './index.html',
+  './style.css?v=1.6.0',
+  './app.js?v=1.6.0',
+  './zan-sig.js?v=1.6.0',
+  './zan-sports.js?v=1.6.0',
+  './manifest.webmanifest',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/logo.jpg'
+];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(VERSION).then(function (c) {
-    // cache: 'reload' memaksa unduh ulang, bukan memakai salinan lama di cache browser
     return c.addAll(SHELL.map(function (u) { return new Request(u, { cache: 'reload' }); }));
   }).then(function () { return self.skipWaiting(); }));
 });
+
 self.addEventListener('activate', function (e) {
   e.waitUntil(caches.keys().then(function (keys) {
     return Promise.all(keys.filter(function (k) { return k !== VERSION; }).map(function (k) { return caches.delete(k); }));
   }).then(function () { return self.clients.claim(); }));
 });
+
 self.addEventListener('fetch', function (e) {
   var req = e.request;
   var url = new URL(req.url);

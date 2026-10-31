@@ -297,36 +297,332 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .empty .btn.primary { color: #050810; }
 .stage:not(.is-playing) .controls { display: none; }
 
-/* ---------- khas Zandev: waktu, tanggal Jawa & Hijriah, jadwal shalat ---------- */
-.sig {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap;
-  margin: 0 clamp(14px, 3vw, 28px) 14px; padding: 10px 14px;
-  border-radius: var(--r-md); background: var(--panel); border: 1px solid var(--line);
+/* ---------- Khas Zandev: Waktu, Penanggalan & Jadwal Shalat (iOS Glassmorphism) ---------- */
+.sig-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 42px; padding: 0 14px; border-radius: 999px;
+  background: rgba(23, 32, 51, 0.7); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.09); color: var(--text); cursor: pointer;
+  font-size: 13px; font-weight: 600; white-space: nowrap; transition: all .2s ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
 }
-.sig-now { display: flex; align-items: center; gap: 16px; min-width: 0; }
-.sig-time { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
-.sig-time span { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
-.sig-time small { font-size: 12px; color: var(--cyan); font-weight: 600; }
-.sig-date { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; padding-left: 16px; border-left: 1px solid var(--line); }
-.sig-date strong { font-weight: 600; font-size: 14px; }
-.sig-date span { font-size: 12.5px; color: var(--muted); }
-.sig-pray-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.sig-pray { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; }
-.sig-pray li {
-  display: grid; grid-template-columns: auto auto; column-gap: 6px; align-items: baseline;
-  padding: 5px 10px; border-radius: 10px; color: var(--muted); font-size: 12.5px;
+.sig-pill:hover {
+  background: rgba(34, 48, 74, 0.75); border-color: rgba(34, 211, 238, 0.4);
+  transform: translateY(-1px); box-shadow: 0 6px 18px rgba(34, 211, 238, 0.15);
 }
-.sig-pray li b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.sig-pray li small { grid-column: 1 / -1; font-size: 11px; line-height: 1.2; }
-.sig-pray li small:empty { display: none; }
-.sig-pray li.is-next { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px rgba(34, 211, 238, .55); }
-.sig-pray li.is-next b { color: var(--cyan); }
-.sig-pray li.is-next small { color: var(--cyan); }
-.sig-loc {
-  border: 1px dashed var(--line); background: transparent; color: var(--muted); cursor: pointer;
-  font-size: 12px; padding: 5px 10px; border-radius: 999px; white-space: nowrap;
+.sig-pill-pulse {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan); animation: sig-pulse 2s infinite ease-in-out;
 }
-.sig-loc:hover { color: var(--text); border-color: #33476b; }
+.sig-pill-badge {
+  font-size: 11px; background: rgba(34, 211, 238, 0.18); color: var(--cyan);
+  padding: 2px 7px; border-radius: 999px; font-weight: 700;
+}
+.sig-pill-chev { width: 14px; height: 14px; opacity: 0.6; }
+
+/* Header Sports Pill */
+.sports-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 42px; padding: 0 14px; border-radius: 999px;
+  background: rgba(23, 32, 51, 0.7); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.09); color: var(--text); cursor: pointer;
+  font-size: 13px; font-weight: 600; white-space: nowrap; transition: all .2s ease;
+}
+.sports-pill:hover {
+  background: rgba(34, 48, 74, 0.75); border-color: rgba(168, 85, 247, 0.4);
+  transform: translateY(-1px); box-shadow: 0 6px 18px rgba(168, 85, 247, 0.15);
+}
+.sports-pill-icon { font-size: 14px; }
+.sports-pill-badge {
+  font-size: 11px; background: rgba(168, 85, 247, 0.2); color: #d8b4fe;
+  padding: 2px 7px; border-radius: 999px; font-weight: 700;
+}
+
+/* Floating Prayer Glass Ribbon */
+.sig-ribbon {
+  margin: 0 clamp(14px, 3vw, 28px) 8px;
+  transition: opacity .25s ease, transform .25s ease, margin .25s ease;
+}
+.sig-ribbon.is-collapsed { display: none; }
+.sig-ribbon-inner {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 6px 12px 6px 16px; border-radius: 999px;
+  background: rgba(16, 22, 36, 0.72); backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.sig-time-chip {
+  display: flex; align-items: center; gap: 12px; background: none; border: 0;
+  padding: 0; cursor: pointer; text-align: left; color: inherit; min-width: 0;
+}
+.sig-live-pulse {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan); animation: sig-pulse 2s infinite ease-in-out; flex: none;
+}
+@keyframes sig-pulse {
+  0%, 100% { transform: scale(0.9); opacity: .5; }
+  50% { transform: scale(1.2); opacity: 1; box-shadow: 0 0 14px var(--cyan); }
+}
+.sig-clock-box { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
+.sig-clock { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.sig-tz { font-size: 11px; color: var(--cyan); font-weight: 700; background: rgba(34, 211, 238, 0.12); padding: 1px 5px; border-radius: 4px; }
+.sig-sep { width: 1px; height: 20px; background: rgba(255, 255, 255, 0.12); flex: none; }
+.sig-date-box { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.sig-date-masehi { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sig-date-hijri { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 5 Prayer Pills Track */
+.sig-track { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.sig-track::-webkit-scrollbar { display: none; }
+.sig-item {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 11px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px; color: var(--muted); cursor: pointer; transition: all .2s;
+  white-space: nowrap;
+}
+.sig-item:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+.sig-item-head { display: inline-flex; align-items: baseline; gap: 6px; }
+.sig-p-name { font-weight: 500; }
+.sig-p-time { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.sig-p-badge { display: none; }
+
+.sig-item.is-next {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.2) 0%, rgba(168, 85, 247, 0.2) 100%);
+  border-color: rgba(34, 211, 238, 0.6);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.25), inset 0 0 10px rgba(34, 211, 238, 0.1);
+  color: #fff;
+}
+.sig-item.is-next .sig-p-name { color: var(--cyan); font-weight: 700; }
+.sig-item.is-next .sig-p-time { color: #fff; text-shadow: 0 0 10px rgba(34, 211, 238, 0.5); }
+.sig-item.is-next .sig-p-badge {
+  display: inline-block; background: var(--grad); color: #050810;
+  font-size: 10px; font-weight: 800; padding: 1px 7px; border-radius: 999px;
+}
+
+/* Actions in Ribbon */
+.sig-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.sig-loc-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.09);
+  padding: 5px 11px; border-radius: 999px; font-size: 12px; color: var(--muted); cursor: pointer;
+  transition: all .2s; white-space: nowrap;
+}
+.sig-loc-pill svg { width: 14px; height: 14px; }
+.sig-loc-pill:hover { border-color: rgba(34, 211, 238, 0.4); color: var(--text); }
+.sig-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--muted); cursor: pointer; transition: all .2s;
+}
+.sig-icon-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.sig-icon-btn svg { width: 15px; height: 15px; }
+
+/* ---------- SPORTS TICKER (Jadwal Bola Running Text) ---------- */
+.sports-ticker {
+  margin: 0 clamp(14px, 3vw, 28px) 14px;
+  position: relative; z-index: 4;
+  transition: opacity .25s ease, margin .25s ease;
+}
+.sports-ticker.is-collapsed { display: none; }
+.sports-ticker-inner {
+  display: flex; align-items: center; gap: 10px;
+  height: 38px; padding: 0 10px 0 14px; border-radius: 999px;
+  background: rgba(16, 22, 36, 0.72); backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.sports-badge-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 800; font-size: 11.5px; letter-spacing: 0.02em; text-transform: uppercase;
+  color: #fff; flex: none; white-space: nowrap;
+}
+.sports-badge-head b {
+  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.sports-filter-chips {
+  display: flex; align-items: center; gap: 4px; flex: none;
+}
+.sports-filter-btn {
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted); border-radius: 999px; font-size: 11px; font-weight: 600;
+  padding: 3px 9px; cursor: pointer; transition: all .18s; white-space: nowrap;
+}
+.sports-filter-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.09); }
+.sports-filter-btn.is-active {
+  background: rgba(34, 211, 238, 0.18); border-color: rgba(34, 211, 238, 0.5);
+  color: var(--cyan);
+}
+
+.sports-track-wrap {
+  flex: 1; min-width: 0; overflow: hidden; position: relative;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+}
+.sports-track {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  animation: ticker-marquee 45s linear infinite;
+  will-change: transform;
+}
+.sports-track:hover, .sports-track.is-paused {
+  animation-play-state: paused;
+}
+@keyframes ticker-marquee {
+  0% { transform: translate3d(0, 0, 0); }
+  100% { transform: translate3d(-50%, 0, 0); }
+}
+
+.ticker-match-item {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 12px; border-radius: 999px; cursor: pointer;
+  font-size: 12.5px; transition: background .18s, transform .18s;
+  user-select: none;
+}
+.ticker-match-item:hover {
+  background: rgba(255, 255, 255, 0.08); transform: translateY(-1px);
+}
+.ticker-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08); color: var(--text);
+}
+.ticker-badge--epl { background: rgba(34, 211, 238, 0.15); color: #67e8f9; border: 1px solid rgba(34, 211, 238, 0.3); }
+.ticker-badge--liga1 { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
+.ticker-badge--ucl { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3); }
+
+.ticker-teams { display: inline-flex; align-items: center; gap: 4px; }
+.ticker-teams strong { font-weight: 600; color: var(--text); }
+.ticker-teams small { color: var(--muted); font-size: 11px; margin: 0 1px; }
+.ticker-meta { color: var(--muted); font-size: 11.5px; }
+.ticker-ch-pill {
+  font-size: 10.5px; font-weight: 700; color: #a5b4fc; background: rgba(99, 102, 241, 0.16);
+  padding: 2px 7px; border-radius: 999px;
+}
+.ticker-sep { color: rgba(255, 255, 255, 0.18); font-size: 8px; margin: 0 8px; }
+
+.sports-controls { display: flex; align-items: center; gap: 4px; flex: none; }
+.sports-ctrl-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--muted); cursor: pointer; transition: all .18s;
+}
+.sports-ctrl-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.sports-ctrl-btn svg { width: 14px; height: 14px; }
+
+/* ---------- Dialogs (iOS Frosted Glass Sheets) ---------- */
+.sig-dialog, .sports-dialog {
+  max-width: 620px; width: min(620px, calc(100vw - 28px));
+  border-radius: 22px; padding: 0;
+  background: rgba(16, 22, 36, 0.88); backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.7), 0 0 40px rgba(34, 211, 238, 0.12);
+  color: var(--text);
+}
+.sig-dialog::backdrop, .sports-dialog::backdrop {
+  background: rgba(5, 8, 14, 0.75); backdrop-filter: blur(8px);
+}
+.sig-dialog-body, .sports-dialog-body {
+  padding: 22px; display: flex; flex-direction: column; gap: 16px;
+  max-height: calc(100dvh - 60px); overflow-y: auto;
+}
+.sig-dh { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sig-dh-meta h2 { margin: 4px 0 0; font-size: 20px; font-weight: 700; }
+.sig-dh-badge {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+  background: rgba(34, 211, 238, 0.12); color: var(--cyan); padding: 3px 8px; border-radius: 999px;
+  font-weight: 700;
+}
+.sig-hero {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px; padding: 16px; align-items: center;
+}
+.sig-hero-left { display: flex; flex-direction: column; gap: 4px; }
+.sig-hero-clock { font-size: 32px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+.sig-hero-clock small { font-size: 13px; color: var(--cyan); margin-left: 6px; }
+.sig-hero-next { margin: 0; font-size: 12px; color: var(--cyan); font-weight: 600; }
+.sig-hero-right { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; border-left: 1px solid rgba(255, 255, 255, 0.1); padding-left: 14px; }
+.sig-hero-line { display: flex; flex-direction: column; }
+.sig-hero-tag { font-size: 10.5px; color: var(--muted); text-transform: uppercase; font-weight: 700; }
+.sig-hero-line strong { font-size: 13px; color: var(--text); }
+
+.sig-section-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.sig-section-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
+.sig-active-loc { font-size: 12px; color: var(--cyan); font-weight: 600; }
+
+.sig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.sig-card {
+  background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+}
+.sig-card.is-next {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.15) 0%, rgba(168, 85, 247, 0.15) 100%);
+  border-color: rgba(34, 211, 238, 0.5); box-shadow: 0 0 14px rgba(34, 211, 238, 0.2);
+}
+.sig-card.is-minor { opacity: 0.7; }
+.sig-card-top { display: flex; align-items: center; justify-content: space-between; }
+.sig-card-name { font-size: 12px; font-weight: 600; color: var(--muted); }
+.sig-card.is-next .sig-card-name { color: var(--cyan); }
+.sig-card-pill { font-size: 9.5px; background: var(--grad); color: #050810; font-weight: 800; padding: 1px 5px; border-radius: 999px; }
+.sig-card-minor { font-size: 9.5px; color: var(--muted); }
+.sig-card-time { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.sig-city-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sig-chip {
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted); border-radius: 999px; padding: 5px 12px; font-size: 12px; cursor: pointer; transition: all .18s;
+}
+.sig-chip:hover { background: rgba(255, 255, 255, 0.09); color: var(--text); }
+.sig-chip.is-active { background: rgba(34, 211, 238, 0.18); border-color: rgba(34, 211, 238, 0.5); color: var(--cyan); font-weight: 700; }
+
+.sig-dialog-foot { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 14px; margin-top: 4px; }
+.sig-gps-btn { justify-content: flex-start; gap: 8px; width: 100%; border-radius: 12px; }
+.sig-footnote { margin: 0; font-size: 11.5px; color: var(--muted); }
+
+/* Sports Modal List */
+.sports-tabs { display: flex; gap: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 10px; }
+.sports-tab {
+  background: transparent; border: 0; color: var(--muted); font-size: 13px; font-weight: 600;
+  padding: 6px 12px; border-radius: 8px; cursor: pointer; transition: all .18s;
+}
+.sports-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.sports-tab.is-active { background: var(--panel-2); color: var(--cyan); font-weight: 700; }
+
+.sports-cards-list { display: flex; flex-direction: column; gap: 10px; }
+.sports-card {
+  background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+}
+.sports-card-header { display: flex; align-items: center; justify-content: space-between; }
+.sports-card-kickoff { font-size: 12px; color: var(--muted); }
+.sports-card-body {
+  display: flex; align-items: center; justify-content: space-between; padding: 6px 0;
+}
+.sports-team { flex: 1; font-size: 15px; font-weight: 700; color: var(--text); }
+.sports-team--home { text-align: left; }
+.sports-team--away { text-align: right; }
+.sports-vs-pill {
+  font-size: 10.5px; font-weight: 800; background: rgba(255, 255, 255, 0.06);
+  color: var(--muted); padding: 3px 8px; border-radius: 6px; margin: 0 12px;
+}
+.sports-card-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 10px;
+}
+.sports-card-ch { font-size: 12px; color: var(--muted); }
+.sports-card-ch strong { color: #a5b4fc; }
+.sports-watch-btn {
+  height: 32px; padding: 0 12px; font-size: 12px; border-radius: 999px;
+  background: var(--grad); border: 0; color: #050810; font-weight: 700;
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+}
+.sports-watch-btn svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
 
 .foot {
   display: flex; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap;
@@ -336,19 +632,21 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .foot a b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 700; }
 .foot a:hover { color: var(--text); }
 
-@media (max-width: 1199px) {
-  .sig-pray li { padding: 5px 8px; }
-}
 @media (max-width: 860px) {
-  .sig { margin: 0 clamp(14px, 3vw, 28px) 12px; padding: 10px 12px; }
-  .sig-pray-wrap { width: 100%; flex-direction: column; align-items: stretch; gap: 8px; }
-  .sig-pray { justify-content: space-between; }
-  .sig-pray li { grid-template-columns: 1fr; text-align: center; padding: 6px 6px; flex: 1; }
-  .sig-pray li small { white-space: nowrap; font-size: 10.5px; }
-  .sig-loc { align-self: center; }
-  .sig-time span { font-size: 20px; }
-  .sig-now { flex-wrap: wrap; gap: 4px 12px; width: 100%; }
-  .sig-date { border-left: 0; padding-left: 0; width: 100%; }
+  .sig-ribbon { margin: 0 clamp(14px, 3vw, 28px) 8px; }
+  .sig-ribbon-inner { border-radius: 16px; padding: 8px 12px; flex-wrap: wrap; gap: 10px; }
+  .sig-time-chip { width: 100%; justify-content: space-between; }
+  .sig-track { width: 100%; justify-content: space-between; padding-bottom: 2px; }
+  .sig-item { padding: 4px 8px; font-size: 11px; }
+  .sig-item-head { gap: 3px; }
+  .sig-actions { width: 100%; justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 6px; }
+
+  .sports-ticker { margin: 0 clamp(14px, 3vw, 28px) 10px; }
+  .sports-ticker-inner { border-radius: 14px; height: 36px; padding: 0 8px 0 10px; }
+  .sports-filter-chips { display: none; }
+  .sports-badge-head { font-size: 10.5px; }
+  .sig-hero { grid-template-columns: 1fr; }
+  .sig-hero-right { border-left: 0; padding-left: 0; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 10px; }
   .foot { justify-content: center; text-align: center; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
 }
 
@@ -483,25 +781,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .search { order: 3; flex-basis: 100%; }
   .search input { padding: 9px 0; }
 
-  /* bar waktu & shalat ringkas */
-  .sig { margin: 0 14px 10px; padding: 8px 10px; gap: 6px; }
-  .sig-now { flex-wrap: nowrap; gap: 10px; align-items: center; }
-  .sig-time span { font-size: 17px; }
-  .sig-time small { font-size: 10.5px; }
-  .sig-date { width: auto; min-width: 0; padding-left: 10px; border-left: 1px solid var(--line); }
-  .sig-date strong { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sig-date span { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sig-pray-wrap { flex-direction: row; align-items: center; gap: 4px; }
-  .sig-pray { flex: 1; gap: 2px; }
-  .sig-pray li { padding: 4px 2px; border-radius: 8px; font-size: 11px; row-gap: 0; }
-  .sig-pray li b { font-size: 12px; }
-  .sig-pray li small { font-size: 9.5px; }
-  .sig-loc { align-self: stretch; font-size: 0; width: 30px; padding: 0; border-radius: 8px; position: relative; flex: none; }
-  .sig-loc::before {
-    content: ""; position: absolute; inset: 0; margin: auto; width: 14px; height: 14px; background: var(--muted);
-    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z'/%3E%3C/svg%3E") center / contain no-repeat;
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z'/%3E%3C/svg%3E") center / contain no-repeat;
-  }
+  /* ribbon waktu shalat & jadwal bola responsif */
+  .sig-ribbon, .sports-ticker { margin-left: 12px; margin-right: 12px; }
 
   /* pesan error ringkas agar muat di layar video yang pendek */
   .msg { padding: 12px 14px; gap: 4px; align-content: center; }
