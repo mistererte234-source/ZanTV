@@ -306,27 +306,12 @@
     }
   }
 
-  /* ---------- Collapse / Expand Ribbon ---------- */
-  function toggleRibbon() {
-    if (!el.ribbon) return;
-    var isCollapsed = el.ribbon.classList.toggle('is-collapsed');
-    try { localStorage.setItem('zandev:sig_ribbon_collapsed', isCollapsed ? '1' : '0'); } catch (e) {}
-    if (el.toggleBtn) {
-      el.toggleBtn.title = isCollapsed ? 'Tampilkan bar jadwal shalat' : 'Sembunyikan bar jadwal shalat';
-      el.toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-    }
-  }
-
-  function initCollapseState() {
+  /* ---------- Bersihkan Legacy Collapse State Supaya Bar Tidak Hilang ---------- */
+  function clearLegacyCollapse() {
     try {
-      var isCollapsed = localStorage.getItem('zandev:sig_ribbon_collapsed') === '1';
-      if (isCollapsed && el.ribbon) {
-        el.ribbon.classList.add('is-collapsed');
-        if (el.toggleBtn) {
-          el.toggleBtn.title = 'Tampilkan bar jadwal shalat';
-          el.toggleBtn.setAttribute('aria-expanded', 'false');
-        }
-      }
+      localStorage.removeItem('zandev:sig_ribbon_collapsed');
+      localStorage.removeItem('zandev:sig_collapsed');
+      if (el.ribbon) el.ribbon.classList.remove('is-collapsed');
     } catch (e) {}
   }
 
@@ -393,10 +378,9 @@
 
     if (!el.clock && !el.pill) return;
 
-    initCollapseState();
+    clearLegacyCollapse();
 
     /* Events */
-    if (el.toggleBtn) el.toggleBtn.addEventListener('click', toggleRibbon);
     if (el.pill) el.pill.addEventListener('click', openModal);
     if (el.timeChip) el.timeChip.addEventListener('click', openModal);
     if (el.detailBtn) el.detailBtn.addEventListener('click', openModal);

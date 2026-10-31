@@ -279,27 +279,11 @@
     }
   }
 
-  /* Collapse / Toggle Ticker */
-  function toggleTicker() {
-    if (!el.ticker) return;
-    var isCollapsed = el.ticker.classList.toggle('is-collapsed');
-    try { localStorage.setItem('zandev:sports_ticker_collapsed', isCollapsed ? '1' : '0'); } catch (e) {}
-    if (el.toggleBtn) {
-      el.toggleBtn.title = isCollapsed ? 'Tampilkan bar jadwal bola' : 'Sembunyikan bar jadwal bola';
-      el.toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-    }
-  }
-
-  function initCollapseState() {
+  /* Bersihkan Legacy Collapse State Supaya Bar Tidak Hilang */
+  function clearLegacyCollapse() {
     try {
-      var isCollapsed = localStorage.getItem('zandev:sports_ticker_collapsed') === '1';
-      if (isCollapsed && el.ticker) {
-        el.ticker.classList.add('is-collapsed');
-        if (el.toggleBtn) {
-          el.toggleBtn.title = 'Tampilkan bar jadwal bola';
-          el.toggleBtn.setAttribute('aria-expanded', 'false');
-        }
-      }
+      localStorage.removeItem('zandev:sports_ticker_collapsed');
+      if (el.ticker) el.ticker.classList.remove('is-collapsed');
     } catch (e) {}
   }
 
@@ -322,7 +306,7 @@
 
     if (!el.ticker && !el.track) return;
 
-    initCollapseState();
+    clearLegacyCollapse();
     renderTicker();
 
     /* Filter buttons on ticker */
@@ -362,9 +346,6 @@
           : '<svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
       });
     }
-
-    /* Toggle collapse */
-    if (el.toggleBtn) el.toggleBtn.addEventListener('click', toggleTicker);
 
     /* Open modal buttons */
     if (el.modalBtn) el.modalBtn.addEventListener('click', openModal);
