@@ -285,6 +285,7 @@
 
   var currentFilter = 'all';
   var isPaused = false;
+  var currentMatches = MATCHES.slice();
   var el = {};
 
   function say(msg) {
@@ -292,8 +293,122 @@
   }
 
   function filterMatches(league) {
-    if (!league || league === 'all') return MATCHES;
-    return MATCHES.filter(function (m) { return m.league === league; });
+    var pool = currentMatches && currentMatches.length ? currentMatches : MATCHES;
+    if (!league || league === 'all') return pool;
+    return pool.filter(function (m) { return m.league === league; });
+  }
+
+  /* Load Real-Time Live Scores from ESPN API */
+  function loadLiveScores() {
+    var endpoints = [
+      { url: 'https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard', league: 'epl', name: 'Premier League', badge: '🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL', channel: 'Vidio' },
+      { url: 'https://site.api.espn.com/apis/site/v2/sports/soccer/idn.1/scoreboard', league: 'liga1', name: 'BRI Liga 1', badge: '🇮🇩 Liga 1', channel: 'Indosiar' },
+      { url: 'https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard', league: 'ucl', name: 'Champions League', badge: '⭐️ UCL', channel: 'SCTV / Vidio' }
+    ];
+
+    Promise.all(endpoints.map(function (ep) {
+      return fetch(ep.url, { cache: 'no-cache' })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (data) { return { ep: ep, events: data && data.events ? data.events : [] }; })
+        .catch(function () { return { ep: ep, events: [] }; });
+    })).then(function (results) {
+      var liveList = [];
+      results.forEach(function (r) {
+        var ep = r.ep;
+        (r.events || []).forEach(function (e) {
+          var comp = e.competitions && e.competitions[0];
+          if (!comp || !comp.competitors) return;
+          var home = null, away = null;
+          comp.competitors.forEach(function (c) {
+            if (c.homeAway === 'home') home = c;
+            else if (c.homeAway === 'away') away = c;
+          });
+          if (!home || !away) return;
+
+          var state = (e.status && e.status.type && e.status.type.state) || 'pre';
+          var isLive = state === 'in';
+          var isPost = state === 'post';
+          var displayClock = (e.status && e.status.displayClock) || '';
+          if (isLive && !displayClock) displayClock = 'LIVE';
+
+          var date = new Date(e.date);
+          var now = new Date();
+          var isToday = date.toDateString() === now.toDateString();
+          var isTomorrow = new Date(now.getTime() + 86400000).toDateString() === date.toDateString();
+          var dayStr = 'Hari ini';
+          if (isToday) dayStr = 'Hari ini';
+          else if (isTomorrow) dayStr = 'Besok';
+          else {
+            try {
+              dayStr = date.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' });
+            } catch (err) {
+              dayStr = '';
+            }
+          }
+
+          var timeStr = '';
+          try {
+            timeStr = date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false }) + ' WIB';
+          } catch (err) {
+            timeStr = (e.status && e.status.type && e.status.type.shortDetail) || '';
+          }
+
+          var hName = (home.team && (home.team.name || home.team.displayName)) || 'Home';
+          var aName = (away.team && (away.team.name || away.team.displayName)) || 'Away';
+          var hCode = (home.team && (home.team.abbreviation || hName.substring(0, 3))).toUpperCase();
+          var aCode = (away.team && (away.team.abbreviation || aName.substring(0, 3))).toUpperCase();
+
+          if (hCode === 'MNC') hCode = 'MCI';
+          if (aCode === 'MNC') aCode = 'MCI';
+          if (hCode === 'MAN') hCode = 'MUN';
+          if (aCode === 'MAN') aCode = 'MUN';
+
+          var matchClock = isLive ? displayClock : (isPost ? 'FT' : '');
+          var matchTime = isLive ? displayClock : (isPost ? 'FT' : (isToday ? timeStr : dayStr + ' ' + timeStr));
+
+          liveList.push({
+            id: 'live-' + e.id,
+            league: ep.league,
+            leagueName: ep.name,
+            leagueBadge: ep.badge,
+            home: hName,
+            away: aName,
+            homeCode: hCode,
+            awayCode: aCode,
+            homeScore: home.score,
+            awayScore: away.score,
+            status: isLive ? 'live' : (isPost ? 'post' : 'upcoming'),
+            isLive: isLive,
+            isPost: isPost,
+            clock: matchClock,
+            day: dayStr,
+            time: matchTime,
+            channel: ep.channel,
+            searchKey: ep.channel
+          });
+        });
+      });
+
+      if (liveList.length > 0) {
+        var presentLeagues = {};
+        liveList.forEach(function (m) { presentLeagues[m.league] = true; });
+        MATCHES.forEach(function (m) {
+          if (!presentLeagues[m.league]) {
+            liveList.push(m);
+          }
+        });
+
+        liveList.sort(function (a, b) {
+          var weight = { live: 0, upcoming: 1, post: 2 };
+          return (weight[a.status] || 1) - (weight[b.status] || 1);
+        });
+        currentMatches = liveList;
+        renderTicker();
+        if (el.modalList && el.dialog && el.dialog.hasAttribute('open')) {
+          renderModalSchedule(currentFilter);
+        }
+      }
+    }).catch(function () {});
   }
 
   /* Render running text marquee */
@@ -306,13 +421,35 @@
     function makeItem(m) {
       var hCode = m.homeCode || m.home.substring(0, 3).toUpperCase();
       var aCode = m.awayCode || m.away.substring(0, 3).toUpperCase();
-      var isLive = m.status === 'live';
+      var isLive = m.status === 'live' || m.isLive;
+      var isPost = m.status === 'post' || m.isPost;
+      var hasScore = (isLive || isPost) && m.homeScore !== undefined && m.awayScore !== undefined && m.homeScore !== null && m.awayScore !== null;
+
+      var statusBadge = '';
+      if (isLive) {
+        statusBadge = '<span class="ticker-live-badge"><span class="ticker-live-dot"></span>' + (m.clock || 'LIVE') + '</span>';
+      } else if (isPost) {
+        statusBadge = '<span class="ticker-ft-badge">FT</span>';
+      }
+
+      var teamsHtml = '';
+      if (hasScore) {
+        teamsHtml = '<span class="ticker-teams"><strong>' + hCode + '</strong> <span class="ticker-score">' + m.homeScore + ' - ' + m.awayScore + '</span> <strong>' + aCode + '</strong></span>';
+      } else {
+        teamsHtml = '<span class="ticker-teams"><strong>' + hCode + '</strong> <small>vs</small> <strong>' + aCode + '</strong></span>';
+      }
+
+      var metaHtml = '';
+      if (!isLive && !isPost && m.time) {
+        metaHtml = '<span class="ticker-meta">' + m.time + '</span>';
+      }
+
       return (
         '<div class="ticker-match-item' + (isLive ? ' is-live' : '') + '" data-id="' + m.id + '" data-channel="' + m.searchKey + '" role="button" tabindex="0" title="' + m.home + ' vs ' + m.away + ' (' + m.channel + ')">' +
           '<span class="ticker-badge ticker-badge--' + m.league + '">' + m.leagueBadge + '</span>' +
-          (isLive ? '<span class="ticker-live-tag"><span class="ticker-live-dot"></span>LIVE</span>' : '') +
-          '<span class="ticker-teams"><strong>' + hCode + '</strong> <small>vs</small> <strong>' + aCode + '</strong></span>' +
-          '<span class="ticker-meta">' + m.time + '</span>' +
+          statusBadge +
+          teamsHtml +
+          metaHtml +
           '<span class="ticker-ch-pill">📺 ' + m.channel + '</span>' +
           '<span class="ticker-sep">◆</span>' +
         '</div>'
@@ -339,17 +476,43 @@
     var list = filterMatches(filter);
 
     el.modalList.innerHTML = list.map(function (m) {
+      var isLive = m.status === 'live' || m.isLive;
+      var isPost = m.status === 'post' || m.isPost;
+      var hasScore = (isLive || isPost) && m.homeScore !== undefined && m.awayScore !== undefined && m.homeScore !== null && m.awayScore !== null;
+
+      var statusTag = '';
+      if (isLive) {
+        statusTag = '<span class="ticker-live-badge"><span class="ticker-live-dot"></span>LIVE ' + (m.clock || '') + '</span>';
+      } else if (isPost) {
+        statusTag = '<span class="ticker-ft-badge">SELESAI (FT)</span>';
+      } else {
+        statusTag = '<span class="sports-card-kickoff">' + m.day + ' • ' + m.time + '</span>';
+      }
+
+      var middleBody = '';
+      if (hasScore) {
+        middleBody = (
+          '<div class="sports-score-box">' +
+            '<span class="sports-score-num">' + m.homeScore + '</span>' +
+            '<span class="sports-score-sep">-</span>' +
+            '<span class="sports-score-num">' + m.awayScore + '</span>' +
+          '</div>'
+        );
+      } else {
+        middleBody = '<div class="sports-vs-pill">VS</div>';
+      }
+
       return (
-        '<div class="sports-card sports-card--' + m.league + '">' +
+        '<div class="sports-card sports-card--' + m.league + (isLive ? ' is-live' : '') + '">' +
           '<div class="sports-card-header">' +
             '<span class="ticker-badge ticker-badge--' + m.league + '">' + m.leagueBadge + ' ' + m.leagueName + '</span>' +
-            '<span class="sports-card-kickoff">' + m.day + ' • ' + m.time + '</span>' +
+            statusTag +
           '</div>' +
           '<div class="sports-card-body">' +
             '<div class="sports-team sports-team--home">' +
               '<span class="sports-team-name">' + m.home + '</span>' +
             '</div>' +
-            '<div class="sports-vs-pill">VS</div>' +
+            middleBody +
             '<div class="sports-team sports-team--away">' +
               '<span class="sports-team-name">' + m.away + '</span>' +
             '</div>' +
@@ -358,7 +521,7 @@
             '<span class="sports-card-ch">Siaran: <strong>' + m.channel + '</strong></span>' +
             '<button class="btn btn-sm sports-watch-btn" type="button" data-key="' + m.searchKey + '">' +
               '<svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>' +
-              'Cari Channel di ZanTV' +
+              'Tonton di ZanTV' +
             '</button>' +
           '</div>' +
         '</div>'
@@ -426,6 +589,8 @@
 
     clearLegacyCollapse();
     renderTicker();
+    loadLiveScores();
+    setInterval(loadLiveScores, 60000);
 
     /* Filter buttons on ticker */
     if (el.filterBar) {
@@ -508,7 +673,8 @@
     matches: MATCHES,
     openModal: openModal,
     closeModal: closeModal,
-    filter: filterMatches
+    filter: filterMatches,
+    refresh: loadLiveScores
   };
 
   if (document.readyState === 'loading') {

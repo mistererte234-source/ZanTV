@@ -408,6 +408,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .ticker-badge--liga1 { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
 .ticker-badge--ucl { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3); }
 
+.ticker-live-badge,
 .ticker-live-tag {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 9.5px; font-weight: 800; background: rgba(239, 68, 68, 0.22);
@@ -417,6 +418,26 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .ticker-live-dot {
   width: 5px; height: 5px; border-radius: 50%; background: #ef4444;
   box-shadow: 0 0 6px #ef4444; animation: sig-pulse 1.2s infinite ease-in-out;
+}
+.ticker-ft-badge {
+  font-size: 9.5px; font-weight: 800; background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 1px 5px; border-radius: 4px; letter-spacing: 0.05em;
+}
+.ticker-score {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  padding: 0 5px;
+  border-radius: 4px;
+  margin: 0 2px;
+}
+.ticker-match-item.is-live {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.22);
 }
 
 .ticker-teams { display: inline-flex; align-items: center; gap: 4px; }
@@ -523,6 +544,12 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .sports-card {
   background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+  transition: all .2s;
+}
+.sports-card.is-live {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.08), rgba(255, 255, 255, 0.02));
+  box-shadow: 0 4px 20px rgba(239, 68, 68, 0.12);
 }
 .sports-card-header { display: flex; align-items: center; justify-content: space-between; }
 .sports-card-kickoff { font-size: 12px; color: var(--muted); }
@@ -535,6 +562,18 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .sports-vs-pill {
   font-size: 10.5px; font-weight: 800; background: rgba(255, 255, 255, 0.06);
   color: var(--muted); padding: 3px 8px; border-radius: 6px; margin: 0 12px;
+}
+.sports-score-box {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 4px 14px; border-radius: 10px; margin: 0 10px;
+}
+.sports-score-num {
+  font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums;
+  color: #38bdf8; min-width: 16px; text-align: center;
+}
+.sports-score-sep {
+  font-size: 15px; font-weight: 700; color: var(--muted);
 }
 .sports-card-footer {
   display: flex; align-items: center; justify-content: space-between;
