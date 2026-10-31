@@ -26,3 +26,9 @@ Perubahan dari perintah ini langsung terbaca server tanpa restart.
 
 ## Batasan
 Login melindungi aplikasi dan daftar playlist. Alamat stream di dalam playlist tetap bisa dilihat oleh pengguna yang sudah masuk (misalnya lewat developer tools), dan alamat itu bisa dibuka tanpa ZanTV.
+
+## Catatan aktivitas (v1.3)
+Disimpan di `/var/lib/zantv/activity.jsonl`, dihapus otomatis setelah 90 hari (ubah lewat `ZANTV_LOG_DAYS`).
+Yang dicatat: masuk, gagal masuk, keluar, channel yang ditonton beserta durasinya, gagal memutar, dan lokasi GPS
+hanya jika pengguna menyetujuinya. Setiap catatan menyimpan waktu, alamat IP, dan perangkat (dari user agent).
+Pengguna diberi tahu di layar login. Admin melihatnya lewat menu Akun → Lihat aktivitas pengguna.

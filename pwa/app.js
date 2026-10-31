@@ -170,6 +170,69 @@ function toast(text) {
 window.zanToast = toast;
 
 /* ------------------------------------------------------------------ */
+/* Catatan aktivitas (diberitahukan ke pengguna di layar login)         */
+/* ------------------------------------------------------------------ */
+var W = { ch: null, secs: 0, last: 0 };
+function track(type, data) {
+  if (!ME) return;
+  var body = JSON.stringify(Object.assign({ type: type }, data || {}));
+  try {
+    if (navigator.sendBeacon && navigator.sendBeacon('/api/activity', new Blob([body], { type: 'application/json' }))) return;
+  } catch (e) {}
+  fetch('/api/activity', { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-ZanTV': '1' }, body: body }).catch(function () {});
+}
+function flushWatch(keepChannel) {
+  if (W.ch && W.secs >= 5) {
+    var pl = activePlaylist();
+    track('watch', { channel: W.ch.name, group: W.ch.group, playlist: pl ? pl.name : '', seconds: Math.round(W.secs) });
+  }
+  W.secs = 0; W.last = 0;
+  if (!keepChannel) W.ch = null;
+}
+function sendPresence() {
+  if (!ME || document.visibilityState !== 'visible') return;
+  var watching = S.playing && !el.video.paused ? S.playing.name : '';
+  fetch('/api/presence', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-ZanTV': '1' }, body: JSON.stringify({ channel: watching }) }).catch(function () {});
+}
+setInterval(sendPresence, 60000);
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'hidden') flushWatch(true); else sendPresence();
+});
+window.addEventListener('pagehide', function () { flushWatch(true); });
+
+/* lokasi GPS: hanya dengan persetujuan pengguna, bisa diubah kapan saja di menu Akun */
+function locKey() { return 'loc-consent:' + (ME ? ME.name : ''); }
+function shareLocation() {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(function (pos) {
+    track('location', { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+  }, function () {}, { enableHighAccuracy: true, timeout: 20000, maximumAge: 600000 });
+}
+function askLocation() {
+  var c = LS.get(locKey(), null);
+  if (c === 'yes') { shareLocation(); return; }
+  if (c === 'no' || !navigator.geolocation) return;
+  $('#locBanner').hidden = false;
+}
+$('#locYes').addEventListener('click', function () {
+  LS.set(locKey(), 'yes'); $('#locBanner').hidden = true; shareLocation(); syncLocToggle();
+});
+$('#locNo').addEventListener('click', function () {
+  LS.set(locKey(), 'no'); $('#locBanner').hidden = true; track('location_declined'); syncLocToggle();
+});
+function syncLocToggle() {
+  var on = LS.get(locKey(), null) === 'yes';
+  $('#locState').textContent = on ? 'Aktif: lokasi dikirim setiap kali kamu masuk.' : 'Nonaktif: lokasi tidak dikirim.';
+  $('#locToggle').textContent = on ? 'Matikan' : 'Aktifkan';
+}
+$('#locToggle').addEventListener('click', function () {
+  var on = LS.get(locKey(), null) === 'yes';
+  if (on) { LS.set(locKey(), 'no'); toast('Berbagi lokasi dimatikan'); }
+  else { LS.set(locKey(), 'yes'); shareLocation(); toast('Berbagi lokasi diaktifkan'); }
+  syncLocToggle();
+});
+
+/* ------------------------------------------------------------------ */
 /* Akun & API server                                                   */
 /* ------------------------------------------------------------------ */
 var ME = null; // { name, role }
@@ -552,7 +615,7 @@ function play(ch, opts) {
   E.nativeFallback = false;
   S.playing = ch; S.cued = null;
   LS.set('last', ch.url);
-  if (!opts.retry) { pushRecent(ch.url); showOSD(ch); }
+  if (!opts.retry) { flushWatch(); W.ch = ch; W.last = 0; pushRecent(ch.url); showOSD(ch); sendPresence(); }
   markPlaying(); updateNow(); hideMsg();
   el.idle.hidden = true;
   setBusy(true);
@@ -604,6 +667,7 @@ function fail(info, token) {
   el.msgBody.textContent = x.body;
   el.msg.hidden = false;
   el.nowMeta.textContent = x.title;
+  if (S.playing) track('play_error', { channel: S.playing.name, reason: x.title });
 }
 
 function explain(info, ch) {
@@ -634,6 +698,14 @@ el.video.addEventListener('waiting', function () {
   E.stall = setTimeout(function () { if (token === E.token && el.video.readyState < 3) fail({ kind: 'network' }, token); }, 20000);
 });
 el.video.addEventListener('pause', syncPlay);
+el.video.addEventListener('timeupdate', function () {
+  if (el.video.paused || W.ch !== S.playing) { W.last = 0; return; }
+  var now = Date.now();
+  if (W.last) { var d = (now - W.last) / 1000; if (d > 0 && d < 3) W.secs += d; }
+  W.last = now;
+});
+el.video.addEventListener('pause', function () { W.last = 0; });
+el.video.addEventListener('waiting', function () { W.last = 0; });
 el.video.addEventListener('volumechange', syncMute);
 
 /* ------------------------------------------------------------------ */
@@ -782,7 +854,7 @@ document.addEventListener('keydown', function (e) {
   var t = e.target;
   var k = e.key;
   var inInput = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
-  if (el.dialog.open || $('#acctDialog').open || !$('#gate').hidden) return;
+  if (el.dialog.open || $('#acctDialog').open || $('#actDialog').open || !$('#gate').hidden) return;
 
   if (inInput) {
     if (t === el.search && (k === 'ArrowDown' || k === 'Enter')) { e.preventDefault(); focusList(); }
@@ -1014,6 +1086,8 @@ function openAccount() {
   $('#acctName').textContent = ME ? ME.name : '';
   $('#acctRole').textContent = ME ? roleLabel(ME.role) : '';
   $('#adminUsers').hidden = !isAdmin();
+  $('#openActivity').hidden = !isAdmin();
+  syncLocToggle();
   if (isAdmin()) loadUsers();
   acct.showModal();
 }
@@ -1066,8 +1140,78 @@ $('#pwSave').addEventListener('click', function () {
 });
 $('#logoutBtn').addEventListener('click', function () {
   acct.close();
+  flushWatch();
   api('POST', '/api/logout').catch(function () {}).then(function () { onLoggedOut(); toast('Kamu sudah keluar'); });
 });
+
+/* ------------------------------------------------------------------ */
+/* Aktivitas pengguna (khusus admin)                                    */
+/* ------------------------------------------------------------------ */
+var actDlg = $('#actDialog');
+var ACT = { before: 0, users: [] };
+var ACT_LABEL = { login: 'Masuk', login_failed: 'Gagal masuk', logout: 'Keluar', watch: 'Menonton', play_error: 'Gagal memutar', location: 'Lokasi', location_declined: 'Menolak berbagi lokasi' };
+function fmtTime(ts) {
+  var d = new Date(ts);
+  return d.getDate() + ' ' + BULAN_PENDEK[d.getMonth()] + ' ' + (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+}
+var BULAN_PENDEK = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+function fmtDur(s) { s = s || 0; if (s < 60) return s + ' detik'; var m = Math.round(s / 60); return m < 60 ? m + ' menit' : Math.floor(m / 60) + ' jam ' + (m % 60) + ' menit'; }
+function fmtDevice(d) {
+  if (!d) return '';
+  return [d.type, d.model, d.os, d.browser].filter(function (x) { return x && x !== 'Tidak diketahui'; }).join(' · ');
+}
+function actDetail(e) {
+  if (e.type === 'watch') return '<b>' + esc(e.channel) + '</b> selama ' + fmtDur(e.seconds) + (e.playlist ? '<small>' + esc(e.playlist) + (e.group ? ', ' + esc(e.group) : '') + '</small>' : '');
+  if (e.type === 'play_error') return esc(e.channel) + '<small>' + esc(e.reason) + '</small>';
+  if (e.type === 'login_failed') return 'Mencoba nama <b>' + esc(e.tried || '-') + '</b>';
+  if (e.type === 'location') {
+    var q = e.lat + ',' + e.lng;
+    return '<a href="https://www.google.com/maps?q=' + encodeURIComponent(q) + '" target="_blank" rel="noopener">' + esc(q) + '</a><small>akurasi sekitar ' + e.accuracy + ' m</small>';
+  }
+  return '';
+}
+function renderPresence(list) {
+  var box = $('#actLive');
+  if (!list.length) { box.innerHTML = '<p class="hint">Tidak ada yang aktif dalam 3 menit terakhir.</p>'; return; }
+  box.innerHTML = list.map(function (p) {
+    return '<div class="live-item"><i></i><div><strong>' + esc(p.user) + '</strong><span>' +
+      (p.channel ? 'menonton ' + esc(p.channel) : 'membuka aplikasi') + '</span><small>' + esc(fmtDevice(p.device)) + ' · ' + esc(p.ip) + '</small></div></div>';
+  }).join('');
+}
+function loadActivity(more) {
+  var params = [];
+  var u = $('#actUser').value, t = $('#actType').value;
+  if (u) params.push('user=' + encodeURIComponent(u));
+  if (t) params.push('type=' + encodeURIComponent(t));
+  if (more && ACT.before) params.push('before=' + ACT.before);
+  var tbody = $('#actRows');
+  if (!more) tbody.innerHTML = '<tr><td colspan="5" class="hint">Memuat…</td></tr>';
+  api('GET', '/api/activity?' + params.join('&')).then(function (r) {
+    var html = r.items.map(function (e) {
+      return '<tr class="t-' + esc(e.type) + '"><td>' + fmtTime(e.ts) + '</td><td>' + esc(e.user || '-') + '</td><td><span class="tag">' +
+        esc(ACT_LABEL[e.type] || e.type) + '</span>' + actDetail(e) + '</td><td>' + esc(fmtDevice(e.device)) + '</td><td class="ip">' + esc(e.ip) + '</td></tr>';
+    }).join('');
+    if (!more) tbody.innerHTML = html || '<tr><td colspan="5" class="hint">Belum ada catatan.</td></tr>';
+    else tbody.insertAdjacentHTML('beforeend', html);
+    if (r.items.length) ACT.before = r.items[r.items.length - 1].ts;
+    $('#actMore').hidden = !r.more;
+    $('#actKeep').textContent = 'Catatan disimpan ' + r.days + ' hari, lalu dihapus otomatis.';
+  }).catch(function (err) { tbody.innerHTML = '<tr><td colspan="5" class="hint">' + esc(err.message) + '</td></tr>'; });
+  if (!more) api('GET', '/api/presence').then(renderPresence).catch(function () {});
+}
+$('#openActivity').addEventListener('click', function () {
+  acct.close();
+  api('GET', '/api/users').then(function (users) {
+    $('#actUser').innerHTML = '<option value="">Semua pengguna</option>' + users.map(function (u) { return '<option>' + esc(u.name) + '</option>'; }).join('');
+  }).catch(function () {});
+  ACT.before = 0;
+  loadActivity(false);
+  actDlg.showModal();
+});
+$('#actUser').addEventListener('change', function () { ACT.before = 0; loadActivity(false); });
+$('#actType').addEventListener('change', function () { ACT.before = 0; loadActivity(false); });
+$('#actRefresh').addEventListener('click', function () { ACT.before = 0; loadActivity(false); });
+$('#actMore').addEventListener('click', function () { loadActivity(true); });
 
 /* ------------------------------------------------------------------ */
 /* Masuk (login)                                                       */
@@ -1081,6 +1225,8 @@ function showGate(message) {
 function onLoggedOut() {
   if (!ME && !gate.hidden) return;
   ME = null;
+  W.ch = null; W.secs = 0;
+  $('#locBanner').hidden = true;
   E.token++;
   destroyEngine();
   S.playing = null; S.cued = null; S.channels = []; S.view = []; S.playlists = [];
@@ -1088,6 +1234,7 @@ function onLoggedOut() {
   el.stage.classList.remove('is-playing');
   if (el.dialog.open) el.dialog.close();
   if (acct.open) acct.close();
+  if (actDlg.open) actDlg.close();
   document.body.classList.remove('is-admin');
   clearSearch();
   renderGroups(); renderList(); updateNow();
@@ -1101,6 +1248,8 @@ function onLoggedIn(user) {
   $('#acctLabel').textContent = user.name;
   S.activeId = LS.get('active', null);
   fetchPlaylists(true);
+  sendPresence();
+  setTimeout(askLocation, 1200);
 }
 $('#loginForm').addEventListener('submit', function (e) {
   e.preventDefault();

@@ -142,9 +142,64 @@ function countChannels(text) {
   return n;
 }
 
+/* ---------------- log aktivitas ---------------- */
+const LOG_FILE = path.join(DATA_DIR, 'activity.jsonl');
+const LOG_DAYS = +(process.env.ZANTV_LOG_DAYS || 90);
+const presence = new Map(); // nama → { ts, channel, ip, device } (hanya di memori)
+
+function parseUA(ua) {
+  ua = String(ua || '');
+  let os = 'Tidak diketahui', browser = 'Tidak diketahui', type = 'Komputer';
+  let m;
+  if (/Android TV|AFT[A-Z]|BRAVIA|SMART-TV|SmartTV|Tizen|Web0S|webOS|GoogleTV|HbbTV/i.test(ua)) type = 'TV';
+  if ((m = /Android ([\d.]+)/.exec(ua))) { os = 'Android ' + m[1]; if (type !== 'TV') type = /Mobile/.test(ua) ? 'HP' : 'Tablet'; }
+  else if ((m = /(iPhone|iPad|iPod).*?OS ([\d_]+)/.exec(ua))) { os = (m[1] === 'iPad' ? 'iPadOS ' : 'iOS ') + m[2].replace(/_/g, '.'); type = m[1] === 'iPad' ? 'Tablet' : 'HP'; }
+  else if (/Windows NT/.test(ua)) os = 'Windows';
+  else if (/Mac OS X/.test(ua)) os = 'macOS';
+  else if (/CrOS/.test(ua)) os = 'ChromeOS';
+  else if (/Tizen/.test(ua)) os = 'Tizen';
+  else if (/Web0S|webOS/i.test(ua)) os = 'webOS';
+  else if (/Linux/.test(ua)) os = 'Linux';
+  if ((m = /Edg(?:A|iOS)?\/(\d+)/.exec(ua))) browser = 'Edge ' + m[1];
+  else if ((m = /SamsungBrowser\/(\d+)/.exec(ua))) browser = 'Samsung Internet ' + m[1];
+  else if ((m = /OPR\/(\d+)/.exec(ua))) browser = 'Opera ' + m[1];
+  else if ((m = /Firefox\/(\d+)/.exec(ua))) browser = 'Firefox ' + m[1];
+  else if ((m = /(?:Chrome|CriOS)\/(\d+)/.exec(ua))) browser = 'Chrome ' + m[1];
+  else if ((m = /Version\/(\d+).*Safari/.exec(ua))) browser = 'Safari ' + m[1];
+  // model perangkat hanya ada kalau browser masih menyertakannya (banyak browser modern menyembunyikannya)
+  let model = '';
+  if ((m = /Android [\d.]+; ([^;)]+?)(?: Build|\))/.exec(ua)) && !/^(K|wv)$/.test(m[1].trim())) model = m[1].trim();
+  return { type, os, browser, model };
+}
+function clientIp(req) {
+  const local = /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(req.socket.remoteAddress || '');
+  return (local && req.headers['x-real-ip']) || req.socket.remoteAddress || '';
+}
+function logEvent(req, user, type, data) {
+  const ua = req.headers['user-agent'] || '';
+  const entry = Object.assign({ ts: Date.now(), user: user || null, type, ip: clientIp(req), ua: ua.slice(0, 300), device: parseUA(ua) }, data || {});
+  try { fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + '\n', { mode: 0o600 }); } catch (e) { console.error('log gagal:', e.message); }
+}
+function readLog() {
+  try {
+    return fs.readFileSync(LOG_FILE, 'utf8').split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+  } catch (e) { return []; }
+}
+function pruneLog() {
+  const cutoff = Date.now() - LOG_DAYS * 24 * 3600 * 1000;
+  const all = readLog();
+  const keep = all.filter((e) => e.ts >= cutoff).slice(-100000);
+  if (keep.length !== all.length) {
+    fs.writeFileSync(LOG_FILE + '.tmp', keep.map((e) => JSON.stringify(e)).join('\n') + (keep.length ? '\n' : ''), { mode: 0o600 });
+    fs.renameSync(LOG_FILE + '.tmp', LOG_FILE);
+  }
+}
+const clip = (v, n) => (v == null ? '' : String(v).slice(0, n));
+
 /* ---------------- HTTP ---------------- */
 function send(res, status, data, headers) {
-  const body = data === undefined ? '' : JSON.stringify(data);
+  const body = data === undefined || status === 204 ? '' : JSON.stringify(data);
   res.writeHead(status, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, headers || {}));
   res.end(body);
 }
@@ -171,7 +226,7 @@ async function handle(req, res) {
 
   if (!p.startsWith('/api/')) throw fail(404, 'Tidak ditemukan');
   // perlindungan CSRF: permintaan yang mengubah data wajib membawa header khusus
-  if (method !== 'GET' && req.headers['x-zantv'] !== '1') throw fail(403, 'Permintaan ditolak');
+  if (method !== 'GET' && req.headers['x-zantv'] !== '1' && p !== '/api/activity') throw fail(403, 'Permintaan ditolak');
 
   if (p === '/api/login' && method === 'POST') {
     if (loginBlocked(ip)) throw fail(429, 'Terlalu banyak percobaan. Coba lagi 10 menit lagi.');
@@ -179,8 +234,9 @@ async function handle(req, res) {
     const name = String(b.username || '').trim().toLowerCase();
     const user = db.users[name];
     const ok = user ? checkPassword(user, String(b.password || '')) : (checkPassword(DUMMY, 'x'), false);
-    if (!ok) { loginFailed(ip); throw fail(401, 'Nama pengguna atau kata sandi salah'); }
+    if (!ok) { loginFailed(ip); logEvent(req, null, 'login_failed', { tried: clip(name, 40) }); throw fail(401, 'Nama pengguna atau kata sandi salah'); }
     attempts.delete(ip);
+    logEvent(req, name, 'login');
     const token = createSession(name);
     return send(res, 200, publicUser(name), { 'Set-Cookie': cookie(token, SESSION_MS / 1000) });
   }
@@ -191,6 +247,8 @@ async function handle(req, res) {
   const needAdmin = () => { if (!admin) throw fail(403, 'Hanya admin yang boleh melakukan ini'); };
 
   if (p === '/api/logout' && method === 'POST') {
+    logEvent(req, me.name, 'logout');
+    presence.delete(me.name);
     delete db.sessions[me.key]; save();
     return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0) });
   }
@@ -250,6 +308,45 @@ async function handle(req, res) {
     fs.writeFileSync(path.join(PL_DIR, pl.id + '.m3u'), text);
     db.playlists.push(pl); save();
     return send(res, 201, pl);
+  }
+
+  /* aktivitas: dikirim aplikasi (tontonan, error, lokasi yang disetujui pengguna) */
+  if (p === '/api/activity' && method === 'POST') {
+    const b = await readBody(req, 4096);
+    const t = String(b.type || '');
+    if (t === 'watch') {
+      const seconds = Math.max(0, Math.min(86400, Math.round(+b.seconds || 0)));
+      logEvent(req, me.name, 'watch', { channel: clip(b.channel, 120), group: clip(b.group, 60), playlist: clip(b.playlist, 80), seconds });
+    } else if (t === 'play_error') {
+      logEvent(req, me.name, 'play_error', { channel: clip(b.channel, 120), reason: clip(b.reason, 120) });
+    } else if (t === 'location') {
+      const lat = +b.lat, lng = +b.lng, acc = Math.round(+b.accuracy || 0);
+      if (!(Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) throw fail(400, 'Lokasi tidak valid');
+      logEvent(req, me.name, 'location', { lat: +lat.toFixed(5), lng: +lng.toFixed(5), accuracy: acc });
+    } else if (t === 'location_declined') {
+      logEvent(req, me.name, 'location_declined');
+    } else throw fail(400, 'Jenis aktivitas tidak dikenal');
+    return send(res, 204);
+  }
+  if (p === '/api/presence' && method === 'POST') {
+    const b = await readBody(req, 2048);
+    presence.set(me.name, { ts: Date.now(), channel: clip(b.channel, 120), ip: clientIp(req), device: parseUA(req.headers['user-agent']) });
+    return send(res, 204);
+  }
+  if (p === '/api/presence' && method === 'GET') {
+    needAdmin();
+    const now = Date.now(), out = [];
+    for (const [name, v] of presence) { if (now - v.ts < 3 * 60 * 1000) out.push(Object.assign({ user: name }, v)); else presence.delete(name); }
+    return send(res, 200, out.sort((a, b) => b.ts - a.ts));
+  }
+  if (p === '/api/activity' && method === 'GET') {
+    needAdmin();
+    const user = url.searchParams.get('user') || '';
+    const type = url.searchParams.get('type') || '';
+    const before = +url.searchParams.get('before') || Infinity;
+    const limit = Math.min(500, +url.searchParams.get('limit') || 200);
+    const rows = readLog().filter((e) => e.ts < before && (!user || e.user === user || e.tried === user) && (!type || e.type === type));
+    return send(res, 200, { days: LOG_DAYS, items: rows.slice(-limit).reverse(), more: rows.length > limit });
   }
 
   /* pengguna (khusus admin) */
@@ -350,4 +447,6 @@ if (process.argv[2]) {
       else res.end();
     });
   }).listen(PORT, HOST, () => console.log(`ZanTV API jalan di http://${HOST}:${PORT} (data: ${DATA_DIR})`));
+  pruneLog();
+  setInterval(pruneLog, 6 * 3600 * 1000).unref();
 }

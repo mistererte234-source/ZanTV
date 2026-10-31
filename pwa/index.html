@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.2.2">
+<link rel="stylesheet" href="style.css?v=1.3.0">
 </head>
 <body>
 <div class="splash" id="splash" aria-hidden="true">
@@ -36,6 +36,7 @@
     <label>Kata sandi<input id="loginPass" name="password" type="password" autocomplete="current-password" required></label>
     <p class="gate-err" id="loginErr" role="alert"></p>
     <button class="btn primary" id="loginBtn" type="submit">Masuk</button>
+    <p class="gate-note">Dengan masuk, kamu setuju waktu akses, alamat IP, jenis perangkat, dan channel yang ditonton dicatat dan bisa dilihat admin. Lokasi GPS hanya dikirim kalau kamu menyetujuinya.</p>
     <a class="gate-by" href="https://zandev.id" target="_blank" rel="noopener">Design × Code by <b>Zandev</b></a>
   </form>
 </div>
@@ -177,6 +178,11 @@
     <label>Kata sandi baru (minimal 8 karakter)<input id="pwNew" type="password" autocomplete="new-password"></label>
     <button class="btn" id="pwSave" type="button">Simpan kata sandi</button>
 
+    <h3>Berbagi lokasi</h3>
+    <div class="loc-row"><span id="locState"></span><button class="btn ghost" id="locToggle" type="button">Aktifkan</button></div>
+
+    <button class="btn" id="openActivity" type="button" hidden>Lihat aktivitas pengguna</button>
+
     <div id="adminUsers" hidden>
       <h3>Pengguna</h3>
       <ul class="pl-list user-list" id="userList"></ul>
@@ -194,9 +200,46 @@
   </div>
 </dialog>
 
+<dialog class="sheet wide" id="actDialog" aria-labelledby="actTitle">
+  <form method="dialog" class="sheet-head">
+    <h2 id="actTitle">Aktivitas pengguna</h2>
+    <button class="ic" value="close" aria-label="Tutup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </form>
+  <div class="act">
+    <h3>Sedang aktif</h3>
+    <div class="act-live" id="actLive"></div>
+    <div class="act-filter">
+      <select id="actUser" aria-label="Pengguna"><option value="">Semua pengguna</option></select>
+      <select id="actType" aria-label="Jenis aktivitas">
+        <option value="">Semua aktivitas</option>
+        <option value="login">Masuk</option>
+        <option value="login_failed">Gagal masuk</option>
+        <option value="watch">Menonton</option>
+        <option value="play_error">Gagal memutar</option>
+        <option value="location">Lokasi</option>
+        <option value="logout">Keluar</option>
+      </select>
+      <button class="btn ghost" id="actRefresh" type="button">Muat ulang</button>
+    </div>
+    <div class="act-table">
+      <table>
+        <thead><tr><th>Waktu</th><th>Pengguna</th><th>Aktivitas</th><th>Perangkat</th><th>IP</th></tr></thead>
+        <tbody id="actRows"></tbody>
+      </table>
+    </div>
+    <button class="btn ghost" id="actMore" type="button" hidden>Muat yang lebih lama</button>
+    <p class="hint" id="actKeep"></p>
+  </div>
+</dialog>
+
+<div class="locbanner" id="locBanner" hidden role="dialog" aria-label="Izin lokasi">
+  <p><strong>Bagikan lokasi perangkat?</strong> Admin ZanTV mencatat lokasi GPS saat kamu masuk, untuk keamanan akun. Lokasi hanya dikirim kalau kamu setuju, dan ZanTV tetap bisa dipakai tanpa ini. Pilihan ini bisa diubah di menu Akun.</p>
+  <div><button class="btn primary" id="locYes" type="button">Bagikan lokasi</button><button class="btn ghost" id="locNo" type="button">Jangan</button></div>
+</div>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.2.2"></script>
-<script src="app.js?v=1.2.2"></script>
+<script src="zan-sig.js?v=1.3.0"></script>
+<script src="app.js?v=1.3.0"></script>
 </body>
 </html>
