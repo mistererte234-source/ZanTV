@@ -46,13 +46,14 @@ Kalau mengubah file aplikasi, naikkan `VERSION` di `sw.js` supaya pengguna menda
 - Footer "Design × Code by Zandev".
 Logika ini ada di `zan-sig.js` dan bisa dipakai ulang di proyek Zandev lain.
 
-## Playlist contoh
-`playlists/indonesia-safe.m3u` — 71 channel iptv-org (Indonesia) yang lolos uji:
-HTTP 200 + header CORS + HTTPS, tanpa header Referer. Sumber:
-`https://iptv-org.github.io/iptv/countries/id.m3u`.
+## Sumber playlist contoh
+Playlist **tidak** disimpan di repo ini (lihat `.gitignore`: `playlists/`, `*.m3u`).
+Unggah lewat menu admin (Playlist -> Tambah -> Unggah file / tempel teks).
 
-`playlists/indonesia-full.m3u` — 98 channel (termasuk yang butuh `Referer`,
-perlu reverse-proxy agar bisa diputar di browser).
+Sumber yang sudah diuji (Indonesia, iptv-org):
+`https://iptv-org.github.io/iptv/countries/id.m3u`
 
-Unggah lewat menu admin (Playlist → Tambah → Unggah file), bukan dibaca
-otomatis dari folder ini.
+Hasil audit 176 channel: 117 balas HTTP 200, semuanya mengirim header CORS,
+98 di antaranya HTTPS. Yang bisa diputar di browser tanpa header tambahan: 71.
+Tiga hal yang harus dipenuhi agar jalan di web: HTTP 200, ada header
+`Access-Control-Allow-Origin`, dan URL `https://` (bukan `http://`).
