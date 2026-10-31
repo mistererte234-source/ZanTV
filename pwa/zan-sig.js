@@ -358,8 +358,8 @@
 
   function init() {
     el = {
-      ribbon: document.getElementById('sigRibbon'),
-      toggleBtn: document.getElementById('sigToggleBtn'),
+      ribbon: document.getElementById('liveBar') || document.getElementById('sigRibbon'),
+      toggleBtn: document.getElementById('liveToggleBtn') || document.getElementById('sigToggleBtn'),
       timeChip: document.getElementById('sigTimeChip'),
       clock: document.getElementById('sigClock'),
       tz: document.getElementById('sigTz'),
@@ -370,11 +370,11 @@
       locName: document.getElementById('sigLocName'),
       detailBtn: document.getElementById('sigDetailBtn'),
 
-      /* Header Pill */
-      pill: document.getElementById('sigPill'),
-      pillName: document.getElementById('sigPillName'),
-      pillTime: document.getElementById('sigPillTime'),
-      pillBadge: document.getElementById('sigPillBadge'),
+      /* Live Bar / Header Prayer Display */
+      pill: document.getElementById('sigTimeChip') || document.getElementById('sigPill'),
+      pillName: document.getElementById('sigPrayNextName') || document.getElementById('sigPillName'),
+      pillTime: document.getElementById('sigPrayNextTime') || document.getElementById('sigPillTime'),
+      pillBadge: document.getElementById('sigPrayNextBadge') || document.getElementById('sigPillBadge'),
 
       /* Dialog Modal */
       dialog: document.getElementById('sigDialog'),

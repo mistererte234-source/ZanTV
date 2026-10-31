@@ -30,13 +30,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.6.0">
+<link rel="stylesheet" href="style.css?v=1.6.2">
 <style id="sig-core-css">
-  .sig-ribbon, .sports-ticker, .sig-pill, .sports-pill { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
-  .sig-ribbon-inner, .sports-ticker-inner { display: flex; align-items: center; justify-content: space-between; background: #101624; border-radius: 999px; }
-  .sig-track { display: flex; align-items: center; gap: 6px; list-style: none; margin: 0; padding: 0; }
-  .sig-item { display: inline-flex; align-items: center; gap: 6px; }
-  .sig-p-time { font-weight: 700; }
+  .live-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
 </head>
 <body>
@@ -75,18 +71,6 @@
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
     <input id="search" type="search" name="zantv-cari" placeholder="Cari channel atau nomor" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" data-lpignore="true" data-1p-ignore readonly>
   </label>
-  <button class="sig-pill" id="sigPill" type="button" title="Waktu shalat & kalender" aria-label="Buka rincian waktu shalat dan kalender">
-    <span class="sig-pill-pulse" aria-hidden="true"></span>
-    <span class="sig-pill-name" id="sigPillName">Dzuhur</span>
-    <strong class="sig-pill-time" id="sigPillTime">--:--</strong>
-    <span class="sig-pill-badge" id="sigPillBadge">--</span>
-    <svg class="sig-pill-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-  </button>
-  <button class="sports-pill" id="sportsPill" type="button" title="Jadwal bola hari ini" aria-label="Buka jadwal bola">
-    <span class="sports-pill-icon">⚽</span>
-    <span class="sports-pill-text">Jadwal Bola</span>
-    <span class="sports-pill-badge" id="sportsPillBadge">EPL · L1 · UCL</span>
-  </button>
   <button class="btn ghost" id="refreshBtn" title="Muat ulang playlist" aria-label="Muat ulang playlist">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
   </button>
@@ -100,63 +84,35 @@
   </button>
 </header>
 
-<section class="sig-ribbon" id="sigRibbon" aria-label="Waktu dan jadwal shalat">
-  <div class="sig-ribbon-inner">
-    <button class="sig-time-chip" id="sigTimeChip" type="button" title="Buka Kalender & Jadwal Shalat">
-      <span class="sig-live-pulse" aria-hidden="true"></span>
-      <div class="sig-clock-box">
-        <span class="sig-clock" id="sigClock">--:--:--</span>
-        <span class="sig-tz" id="sigTz">WIB</span>
-      </div>
-      <div class="sig-sep" aria-hidden="true"></div>
-      <div class="sig-date-box">
-        <span class="sig-date-masehi" id="sigDate">--</span>
-        <span class="sig-date-hijri" id="sigHijri">--</span>
-      </div>
+<section class="live-bar" id="liveBar" aria-label="Informasi waktu shalat dan jadwal bola">
+  <div class="live-bar-inner">
+    <button class="live-bar-pray" id="sigTimeChip" type="button" title="Buka Kalender & Jadwal Shalat Lengkap">
+      <span class="live-pulse" aria-hidden="true"></span>
+      <span class="live-pray-clock" id="sigClock">--:--</span>
+      <span class="live-pray-sep" aria-hidden="true">•</span>
+      <span class="live-pray-name" id="sigPrayNextName">Maghrib</span>
+      <strong class="live-pray-time" id="sigPrayNextTime">17:27</strong>
+      <span class="live-pray-cd" id="sigPrayNextBadge">2j lagi</span>
     </button>
 
-    <div class="sig-track" id="sigPray" role="list" aria-label="5 waktu shalat fardhu"></div>
+    <div class="live-bar-divider" aria-hidden="true"></div>
 
-    <div class="sig-actions">
-      <button class="sig-loc-pill" id="sigLoc" type="button" title="Ubah lokasi jadwal">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/><circle cx="12" cy="11" r="2.5"/></svg>
-        <span id="sigLocName">Surabaya</span>
-      </button>
-      <button class="sig-icon-btn" id="sigDetailBtn" type="button" title="Rincian kalender & jadwal shalat" aria-label="Buka kalender dan jadwal shalat">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><circle cx="8" cy="15" r="1"/><circle cx="12" cy="15" r="1"/><circle cx="16" cy="15" r="1"/></svg>
-      </button>
-      <button class="sig-icon-btn sig-toggle-btn" id="sigToggleBtn" type="button" title="Sembunyikan / Tampilkan bar ini" aria-label="Sembunyikan bar jadwal">
-        <svg viewBox="0 0 24 24" class="sig-chevron" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
-      </button>
-    </div>
-  </div>
-</section>
-
-<section class="sports-ticker" id="sportsTicker" aria-label="Running text jadwal bola">
-  <div class="sports-ticker-inner">
-    <div class="sports-badge-head">
-      <span>⚽</span>
-      <span>Jadwal <b>Bola</b></span>
-    </div>
-    <div class="sports-filter-chips" id="sportsFilter">
-      <button class="sports-filter-btn is-active" type="button" data-league="all">Semua</button>
-      <button class="sports-filter-btn" type="button" data-league="epl">EPL 🏴󠁧󠁢󠁥󠁮󠁧󠁿</button>
-      <button class="sports-filter-btn" type="button" data-league="liga1">Liga 1 🇮🇩</button>
-      <button class="sports-filter-btn" type="button" data-league="ucl">UCL ⭐️</button>
-    </div>
-    <div class="sports-track-wrap">
-      <div class="sports-track" id="sportsTrack"></div>
-    </div>
-    <div class="sports-controls">
-      <button class="sports-ctrl-btn" id="sportsPauseBtn" type="button" title="Jeda running text">
-        <svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-      </button>
-      <button class="sports-ctrl-btn" id="sportsModalBtn" type="button" title="Jadwal lengkap semua liga">
-        <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
-      </button>
-      <button class="sports-ctrl-btn" id="sportsToggleBtn" type="button" title="Sembunyikan / tampilkan bar">
-        <svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>
-      </button>
+    <div class="live-bar-sports">
+      <div class="live-sports-tag" id="sportsModalBtn" role="button" tabindex="0" title="Buka jadwal lengkap sepak bola">
+        <span>⚽</span>
+        <span class="live-sports-title">Jadwal <b>Bola</b></span>
+      </div>
+      <div class="live-track-wrap">
+        <div class="sports-track" id="sportsTrack"></div>
+      </div>
+      <div class="live-bar-ctrls">
+        <button class="live-ctrl-btn" id="sportsPauseBtn" type="button" title="Jeda running text">
+          <svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        </button>
+        <button class="live-ctrl-btn" id="liveToggleBtn" type="button" title="Sembunyikan / tampilkan bar info">
+          <svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>
+        </button>
+      </div>
     </div>
   </div>
 </section>
@@ -404,8 +360,8 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.6.0"></script>
-<script src="zan-sports.js?v=1.6.0"></script>
-<script src="app.js?v=1.6.0"></script>
+<script src="zan-sig.js?v=1.6.2"></script>
+<script src="zan-sports.js?v=1.6.2"></script>
+<script src="app.js?v=1.6.2"></script>
 </body>
 </html>

@@ -305,10 +305,10 @@
 
   function init() {
     el = {
-      ticker: document.getElementById('sportsTicker'),
+      ticker: document.getElementById('liveBar') || document.getElementById('sportsTicker'),
       track: document.getElementById('sportsTrack'),
       filterBar: document.getElementById('sportsFilter'),
-      toggleBtn: document.getElementById('sportsToggleBtn'),
+      toggleBtn: document.getElementById('liveToggleBtn') || document.getElementById('sportsToggleBtn'),
       pauseBtn: document.getElementById('sportsPauseBtn'),
       modalBtn: document.getElementById('sportsModalBtn'),
       sportsPill: document.getElementById('sportsPill'),
