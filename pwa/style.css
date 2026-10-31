@@ -408,6 +408,17 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .ticker-badge--liga1 { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
 .ticker-badge--ucl { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3); }
 
+.ticker-live-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 9.5px; font-weight: 800; background: rgba(239, 68, 68, 0.22);
+  color: #f87171; border: 1px solid rgba(239, 68, 68, 0.45);
+  padding: 1px 5px; border-radius: 4px; letter-spacing: 0.05em;
+}
+.ticker-live-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: #ef4444;
+  box-shadow: 0 0 6px #ef4444; animation: sig-pulse 1.2s infinite ease-in-out;
+}
+
 .ticker-teams { display: inline-flex; align-items: center; gap: 4px; }
 .ticker-teams strong { font-weight: 700; color: var(--text); letter-spacing: 0.03em; }
 .ticker-teams small { color: var(--muted); font-size: 10.5px; margin: 0 2px; }
