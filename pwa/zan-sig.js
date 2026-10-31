@@ -343,7 +343,7 @@
 
   function init() {
     el = {
-      ribbon: document.getElementById('liveBar') || document.getElementById('sigRibbon'),
+      ribbon: document.getElementById('sigBar') || document.getElementById('liveBar') || document.getElementById('sigRibbon'),
       toggleBtn: document.getElementById('liveToggleBtn') || document.getElementById('sigToggleBtn'),
       timeChip: document.getElementById('sigTimeChip'),
       clock: document.getElementById('sigClock'),

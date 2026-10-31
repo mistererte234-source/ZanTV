@@ -297,35 +297,33 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .empty .btn.primary { color: #050810; }
 .stage:not(.is-playing) .controls { display: none; }
 
-/* ---------- Khas Zandev: Waktu, Penanggalan & Jadwal Shalat (iOS Glassmorphism) ---------- */
-/* ---------- Unified Live Info Bar: Waktu Shalat & Jadwal Bola (iOS Glassmorphism) ---------- */
-.live-bar {
-  margin: 0 clamp(14px, 3vw, 28px) 12px;
+/* ---------- Khas Zandev: Waktu, Penanggalan & Jadwal Shalat (Baris 1) ---------- */
+.sig-bar {
+  margin: 0 clamp(14px, 3vw, 28px) 8px;
   position: relative; z-index: 5;
-  transition: opacity .25s ease, margin .25s ease, transform .25s ease;
+  transition: opacity .25s ease, margin .25s ease;
 }
-.live-bar-inner {
-  display: flex; align-items: center; gap: 12px;
-  height: 40px; padding: 0 10px 0 14px;
+.sig-bar-inner {
+  display: flex; align-items: center;
+  height: 38px; padding: 0 12px;
   border-radius: var(--r-md); /* 12px clean iOS squircle, tidak over-rounded */
   background: #101624;
   background: rgba(16, 22, 36, 0.82);
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: 0 6px 20px -4px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   overflow: hidden;
 }
-
-/* Bagian Waktu Shalat (Kiri) */
-.live-bar-pray {
-  display: inline-flex; align-items: center; gap: 8px;
+.sig-bar-btn {
+  display: inline-flex; align-items: center; gap: 8px; width: 100%;
   background: none; border: 0; padding: 0;
   color: inherit; cursor: pointer; text-align: left;
-  flex: none; white-space: nowrap; font-size: 13px;
+  white-space: nowrap; font-size: 13px; font-family: inherit;
+  overflow: hidden; text-overflow: ellipsis;
   transition: opacity .18s;
 }
-.live-bar-pray:hover { opacity: 0.85; }
+.sig-bar-btn:hover { opacity: 0.9; }
 .live-pulse {
   width: 7px; height: 7px; border-radius: 50%; background: var(--cyan);
   box-shadow: 0 0 10px var(--cyan); animation: sig-pulse 2s infinite ease-in-out; flex: none;
@@ -334,52 +332,60 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   0%, 100% { transform: scale(0.9); opacity: .5; }
   50% { transform: scale(1.2); opacity: 1; box-shadow: 0 0 14px var(--cyan); }
 }
-.live-pray-clock {
-  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); font-size: 13.5px;
+.sig-bar-clock {
+  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); font-size: 13.5px; flex: none;
 }
-.live-pray-sep { color: rgba(255, 255, 255, 0.2); font-size: 11px; }
-.live-pray-name {
-  color: var(--cyan); font-weight: 700; font-size: 12.5px;
-}
-.live-pray-time {
-  color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 13px;
-  text-shadow: 0 0 8px rgba(34, 211, 238, 0.4);
-}
-.live-pray-cd {
+.sig-bar-sep { color: rgba(255, 255, 255, 0.2); font-size: 11px; flex: none; }
+.sig-bar-date { color: var(--muted); font-size: 12.5px; flex: none; }
+.sig-bar-hijri { color: #a5b4fc; font-size: 12px; flex: none; }
+.sig-bar-next { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.sig-bar-label { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.02em; }
+.sig-bar-name { color: var(--cyan); font-weight: 700; font-size: 12.5px; }
+.sig-bar-time { color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 13px; text-shadow: 0 0 8px rgba(34, 211, 238, 0.4); }
+.sig-bar-badge {
   font-size: 10px; font-weight: 800; background: rgba(34, 211, 238, 0.18);
   color: var(--cyan); padding: 2px 7px; border-radius: 6px;
   border: 1px solid rgba(34, 211, 238, 0.3);
 }
 
-.live-bar-divider {
-  width: 1px; height: 18px; background: rgba(255, 255, 255, 0.12); flex: none;
+/* ---------- Jadwal Bola Running Text (Baris 2 - Di Bawah Jadwal Shalat) ---------- */
+.sports-bar {
+  margin: 0 clamp(14px, 3vw, 28px) 12px;
+  position: relative; z-index: 4;
+  transition: opacity .25s ease, margin .25s ease;
 }
-
-/* Bagian Running Text Jadwal Bola (Kanan) */
-.live-bar-sports {
+.sports-bar-inner {
   display: flex; align-items: center; gap: 10px;
-  flex: 1; min-width: 0; overflow: hidden;
+  height: 38px; padding: 0 10px 0 12px;
+  border-radius: var(--r-md); /* 12px clean iOS squircle */
+  background: #101624;
+  background: rgba(16, 22, 36, 0.82);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 20px -4px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow: hidden;
 }
-.live-sports-tag {
+.sports-bar-tag {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 11px; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase;
   color: #fff; flex: none; white-space: nowrap; cursor: pointer;
   padding: 3px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06); transition: all .18s;
 }
-.live-sports-tag:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(168, 85, 247, 0.4); }
-.live-sports-tag b {
+.sports-bar-tag:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(168, 85, 247, 0.4); }
+.sports-bar-tag b {
   background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-
-.live-track-wrap {
+.sports-track-wrap {
   flex: 1; min-width: 0; overflow: hidden; position: relative;
   -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
   mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
 }
 .sports-track {
   display: inline-flex; align-items: center; white-space: nowrap;
-  animation: ticker-marquee 45s linear infinite; will-change: transform;
+  animation: ticker-marquee 90s linear infinite; /* Pelan, santai, mudah dibaca */
+  will-change: transform;
 }
 .sports-track:hover, .sports-track.is-paused {
   animation-play-state: paused;
@@ -403,7 +409,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .ticker-badge--ucl { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3); }
 
 .ticker-teams { display: inline-flex; align-items: center; gap: 4px; }
-.ticker-teams strong { font-weight: 600; color: var(--text); }
+.ticker-teams strong { font-weight: 700; color: var(--text); letter-spacing: 0.03em; }
 .ticker-teams small { color: var(--muted); font-size: 10.5px; margin: 0 2px; }
 .ticker-meta { color: var(--muted); font-size: 11px; }
 .ticker-ch-pill {
@@ -412,7 +418,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 }
 .ticker-sep { color: rgba(255, 255, 255, 0.18); font-size: 7px; margin: 0 6px; }
 
-.live-bar-ctrls { display: flex; align-items: center; gap: 4px; flex: none; }
+.sports-bar-ctrls { display: flex; align-items: center; gap: 4px; flex: none; }
 .live-ctrl-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border-radius: 6px;
@@ -541,20 +547,23 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .foot a:hover { color: var(--text); }
 
 @media (max-width: 860px) {
-  .live-bar { margin: 0 clamp(12px, 3vw, 24px) 10px; }
-  .live-bar-inner { height: 38px; border-radius: 10px; padding: 0 8px 0 10px; gap: 8px; }
-  .live-pray-date { display: none; }
-  .live-sports-title { display: none; }
-  .live-sports-tag { padding: 3px 6px; }
-  .live-bar-ctrls { display: none; }
+  .sig-bar { margin: 0 clamp(12px, 3vw, 24px) 6px; }
+  .sig-bar-inner { height: 36px; border-radius: 10px; padding: 0 10px; }
+  .sports-bar { margin: 0 clamp(12px, 3vw, 24px) 10px; }
+  .sports-bar-inner { height: 36px; border-radius: 10px; padding: 0 8px 0 10px; gap: 8px; }
+  .sig-hide-mobile { display: none; }
+  .sports-bar-title { display: none; }
+  .sports-bar-tag { padding: 3px 6px; }
   .sig-hero { grid-template-columns: 1fr; }
   .sig-hero-right { border-left: 0; padding-left: 0; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 10px; }
   .foot { justify-content: center; text-align: center; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
 }
 
 @media (max-width: 540px) {
-  .live-pray-clock, .live-pray-sep { display: none; }
-  .live-bar-inner { gap: 6px; padding: 0 6px 0 8px; }
+  .sig-hide-tiny { display: none; }
+  .sig-bar-inner { padding: 0 8px; }
+  .sports-bar-inner { gap: 6px; padding: 0 6px 0 8px; }
+  .sports-track { animation-duration: 80s; }
 }
 
 /* ---------- splash ---------- */
@@ -689,7 +698,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .search input { padding: 9px 0; }
 
   /* ribbon waktu shalat & jadwal bola responsif */
-  .live-bar { margin-left: 12px; margin-right: 12px; }
+  .sig-bar, .sports-bar { margin-left: 12px; margin-right: 12px; }
 
   /* pesan error ringkas agar muat di layar video yang pendek */
   .msg { padding: 12px 14px; gap: 4px; align-content: center; }
@@ -759,6 +768,8 @@ body.stage-theater-fullscreen .stage::before {
   display: none !important;
 }
 body.stage-theater-fullscreen .top,
+body.stage-theater-fullscreen .sig-bar,
+body.stage-theater-fullscreen .sports-bar,
 body.stage-theater-fullscreen .sig-ribbon,
 body.stage-theater-fullscreen .sports-ticker,
 body.stage-theater-fullscreen .groups,

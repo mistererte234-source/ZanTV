@@ -14,6 +14,8 @@
       leagueBadge: '🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL',
       home: 'Arsenal',
       away: 'Chelsea',
+      homeCode: 'ARS',
+      awayCode: 'CHE',
       day: 'Sabtu, 31 Okt',
       time: '19:30 WIB',
       channel: 'Vidio',
@@ -27,6 +29,8 @@
       leagueBadge: '🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL',
       home: 'Newcastle',
       away: 'Tottenham',
+      homeCode: 'NEW',
+      awayCode: 'TOT',
       day: 'Sabtu, 31 Okt',
       time: '22:00 WIB',
       channel: 'Vidio',
@@ -40,6 +44,8 @@
       leagueBadge: '🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL',
       home: 'Man United',
       away: 'Aston Villa',
+      homeCode: 'MUN',
+      awayCode: 'AVL',
       day: 'Minggu, 1 Nov',
       time: '21:00 WIB',
       channel: 'Vidio',
@@ -53,6 +59,8 @@
       leagueBadge: '🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL',
       home: 'Man City',
       away: 'Liverpool',
+      homeCode: 'MCI',
+      awayCode: 'LIV',
       day: 'Minggu, 1 Nov',
       time: '23:30 WIB',
       channel: 'Vidio',
@@ -68,6 +76,8 @@
       leagueBadge: '🇮🇩 Liga 1',
       home: 'Persebaya',
       away: 'Arema FC',
+      homeCode: 'SBY',
+      awayCode: 'ARE',
       day: 'Sabtu, 31 Okt',
       time: '19:00 WIB',
       channel: 'Indosiar',
@@ -81,6 +91,8 @@
       leagueBadge: '🇮🇩 Liga 1',
       home: 'Persib Bandung',
       away: 'Persija Jakarta',
+      homeCode: 'PSB',
+      awayCode: 'PSJ',
       day: 'Minggu, 1 Nov',
       time: '15:30 WIB',
       channel: 'Indosiar',
@@ -94,6 +106,8 @@
       leagueBadge: '🇮🇩 Liga 1',
       home: 'Bali United',
       away: 'PSM Makassar',
+      homeCode: 'BLI',
+      awayCode: 'PSM',
       day: 'Minggu, 1 Nov',
       time: '19:00 WIB',
       channel: 'Indosiar',
@@ -107,6 +121,8 @@
       leagueBadge: '🇮🇩 Liga 1',
       home: 'Borneo FC',
       away: 'Madura United',
+      homeCode: 'BOR',
+      awayCode: 'MAD',
       day: 'Senin, 2 Nov',
       time: '15:30 WIB',
       channel: 'Indosiar',
@@ -122,6 +138,8 @@
       leagueBadge: '⭐️ UCL',
       home: 'Real Madrid',
       away: 'Bayern München',
+      homeCode: 'RMA',
+      awayCode: 'BAY',
       day: 'Rabu, 4 Nov',
       time: '03:00 WIB',
       channel: 'SCTV / Vidio',
@@ -135,6 +153,8 @@
       leagueBadge: '⭐️ UCL',
       home: 'Liverpool',
       away: 'Bayer Leverkusen',
+      homeCode: 'LIV',
+      awayCode: 'LEV',
       day: 'Rabu, 4 Nov',
       time: '03:00 WIB',
       channel: 'Champions TV',
@@ -148,6 +168,8 @@
       leagueBadge: '⭐️ UCL',
       home: 'Inter Milan',
       away: 'Arsenal',
+      homeCode: 'INT',
+      awayCode: 'ARS',
       day: 'Kamis, 5 Nov',
       time: '03:00 WIB',
       channel: 'Champions TV',
@@ -161,6 +183,8 @@
       leagueBadge: '⭐️ UCL',
       home: 'Barcelona',
       away: 'Paris Saint-Germain',
+      homeCode: 'BAR',
+      awayCode: 'PSG',
       day: 'Kamis, 5 Nov',
       time: '03:00 WIB',
       channel: 'SCTV / Vidio',
@@ -190,11 +214,13 @@
 
     // Render duplicates so continuous loop is seamless
     function makeItem(m) {
+      var hCode = m.homeCode || m.home.substring(0, 3).toUpperCase();
+      var aCode = m.awayCode || m.away.substring(0, 3).toUpperCase();
       return (
-        '<div class="ticker-match-item" data-id="' + m.id + '" data-channel="' + m.searchKey + '" role="button" tabindex="0" title="Klik untuk cari channel siaran ' + m.channel + '">' +
+        '<div class="ticker-match-item" data-id="' + m.id + '" data-channel="' + m.searchKey + '" role="button" tabindex="0" title="' + m.home + ' vs ' + m.away + ' (' + m.channel + ')">' +
           '<span class="ticker-badge ticker-badge--' + m.league + '">' + m.leagueBadge + '</span>' +
-          '<span class="ticker-teams"><strong>' + m.home + '</strong> <small>vs</small> <strong>' + m.away + '</strong></span>' +
-          '<span class="ticker-meta">' + m.day + ' · ' + m.time + '</span>' +
+          '<span class="ticker-teams"><strong>' + hCode + '</strong> <small>vs</small> <strong>' + aCode + '</strong></span>' +
+          '<span class="ticker-meta">' + m.time + '</span>' +
           '<span class="ticker-ch-pill">📺 ' + m.channel + '</span>' +
           '<span class="ticker-sep">◆</span>' +
         '</div>'
@@ -289,7 +315,7 @@
 
   function init() {
     el = {
-      ticker: document.getElementById('liveBar') || document.getElementById('sportsTicker'),
+      ticker: document.getElementById('sportsBar') || document.getElementById('liveBar') || document.getElementById('sportsTicker'),
       track: document.getElementById('sportsTrack'),
       filterBar: document.getElementById('sportsFilter'),
       toggleBtn: document.getElementById('liveToggleBtn') || document.getElementById('sportsToggleBtn'),

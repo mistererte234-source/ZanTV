@@ -30,9 +30,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.6.3">
+<link rel="stylesheet" href="style.css?v=1.6.4">
 <style id="sig-core-css">
-  .live-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
+  .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
 </head>
 <body>
@@ -84,32 +84,39 @@
   </button>
 </header>
 
-<section class="live-bar" id="liveBar" aria-label="Informasi waktu shalat dan jadwal bola">
-  <div class="live-bar-inner">
-    <button class="live-bar-pray" id="sigTimeChip" type="button" title="Buka Kalender & Jadwal Shalat Lengkap">
+<section class="sig-bar" id="sigBar" aria-label="Jadwal waktu shalat dan kalender">
+  <div class="sig-bar-inner">
+    <button class="sig-bar-btn" id="sigTimeChip" type="button" title="Buka Kalender & Jadwal Shalat Lengkap">
       <span class="live-pulse" aria-hidden="true"></span>
-      <span class="live-pray-clock" id="sigClock">--:--</span>
-      <span class="live-pray-sep" aria-hidden="true">•</span>
-      <span class="live-pray-name" id="sigPrayNextName">Maghrib</span>
-      <strong class="live-pray-time" id="sigPrayNextTime">17:27</strong>
-      <span class="live-pray-cd" id="sigPrayNextBadge">2j lagi</span>
+      <span class="sig-bar-clock" id="sigClock">--:--:--</span>
+      <span class="sig-bar-sep sig-hide-tiny" aria-hidden="true">•</span>
+      <span class="sig-bar-date sig-hide-tiny" id="sigDate">--</span>
+      <span class="sig-bar-sep sig-hide-mobile" aria-hidden="true">•</span>
+      <span class="sig-bar-hijri sig-hide-mobile" id="sigHijri">--</span>
+      <span class="sig-bar-sep" aria-hidden="true">•</span>
+      <span class="sig-bar-next">
+        <span class="sig-bar-label">Shalat:</span>
+        <span class="sig-bar-name" id="sigPrayNextName">Maghrib</span>
+        <strong class="sig-bar-time" id="sigPrayNextTime">17:27</strong>
+        <span class="sig-bar-badge" id="sigPrayNextBadge">1j 30m lagi</span>
+      </span>
     </button>
+  </div>
+</section>
 
-    <div class="live-bar-divider" aria-hidden="true"></div>
-
-    <div class="live-bar-sports">
-      <div class="live-sports-tag" id="sportsModalBtn" role="button" tabindex="0" title="Buka jadwal lengkap sepak bola">
-        <span>⚽</span>
-        <span class="live-sports-title">Jadwal <b>Bola</b></span>
-      </div>
-      <div class="live-track-wrap">
-        <div class="sports-track" id="sportsTrack"></div>
-      </div>
-      <div class="live-bar-ctrls">
-        <button class="live-ctrl-btn" id="sportsPauseBtn" type="button" title="Jeda running text">
-          <svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-        </button>
-      </div>
+<section class="sports-bar" id="sportsBar" aria-label="Jadwal pertandingan sepak bola">
+  <div class="sports-bar-inner">
+    <div class="sports-bar-tag" id="sportsModalBtn" role="button" tabindex="0" title="Buka jadwal lengkap sepak bola">
+      <span>⚽</span>
+      <span class="sports-bar-title">Jadwal <b>Bola</b></span>
+    </div>
+    <div class="sports-track-wrap">
+      <div class="sports-track" id="sportsTrack"></div>
+    </div>
+    <div class="sports-bar-ctrls">
+      <button class="live-ctrl-btn" id="sportsPauseBtn" type="button" title="Jeda running text" aria-label="Jeda running text">
+        <svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      </button>
     </div>
   </div>
 </section>
@@ -357,8 +364,8 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.6.3"></script>
-<script src="zan-sports.js?v=1.6.3"></script>
-<script src="app.js?v=1.6.3"></script>
+<script src="zan-sig.js?v=1.6.4"></script>
+<script src="zan-sports.js?v=1.6.4"></script>
+<script src="app.js?v=1.6.4"></script>
 </body>
 </html>
