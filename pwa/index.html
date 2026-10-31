@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#080B12">
+<meta name="color-scheme" content="dark">
+<title>ZanTV</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="style.css?v=1.2.2">
+</head>
+<body>
+<div class="splash" id="splash" aria-hidden="true">
+  <div class="splash-inner">
+    <img src="icons/logo.jpg" alt="" class="splash-logo" width="196" height="292">
+    <div class="splash-bar"><i></i></div>
+    <p class="splash-by">Design × Code by Zandev</p>
+  </div>
+</div>
+<script>
+  /* splash hanya sekali per sesi agar reload tidak mengganggu */
+  try { if (sessionStorage.getItem('zantv:splash')) document.getElementById('splash').remove(); } catch (e) {}
+</script>
+
+<div class="gate" id="gate" hidden>
+  <form class="gate-card" id="loginForm" autocomplete="on">
+    <img src="icons/icon-192.png" width="60" height="60" alt="">
+    <h1>Masuk ke <span class="wordmark">Zan<b>TV</b></span></h1>
+    <p class="gate-sub">Akun dibuat oleh admin.</p>
+    <label>Nama pengguna<input id="loginUser" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+    <label>Kata sandi<input id="loginPass" name="password" type="password" autocomplete="current-password" required></label>
+    <p class="gate-err" id="loginErr" role="alert"></p>
+    <button class="btn primary" id="loginBtn" type="submit">Masuk</button>
+    <a class="gate-by" href="https://zandev.id" target="_blank" rel="noopener">Design × Code by <b>Zandev</b></a>
+  </form>
+</div>
+
+<header class="top">
+  <a class="brand" href="./" aria-label="ZanTV beranda">
+    <img src="icons/icon-192.png" alt="" width="34" height="34">
+    <span class="wordmark">Zan<b>TV</b></span>
+  </a>
+  <label class="search">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+    <input id="search" type="search" name="zantv-cari" placeholder="Cari channel atau nomor" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" data-lpignore="true" data-1p-ignore readonly>
+  </label>
+  <button class="btn ghost" id="refreshBtn" title="Muat ulang playlist" aria-label="Muat ulang playlist">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+  </button>
+  <button class="btn ghost" id="acctBtn" title="Akun">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+    <span id="acctLabel">Akun</span>
+  </button>
+  <button class="btn" id="playlistBtn">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h12M4 12h12M4 18h8"/><path d="m17 15 4 2.5-4 2.5z"/></svg>
+    <span id="playlistName">Playlist</span>
+  </button>
+</header>
+
+<section class="sig" aria-label="Waktu dan jadwal shalat">
+  <div class="sig-now">
+    <div class="sig-time"><span id="sigClock">--:--:--</span><small id="sigTz">WIB</small></div>
+    <div class="sig-date">
+      <strong id="sigDate">&nbsp;</strong>
+      <span id="sigHijri">&nbsp;</span>
+    </div>
+  </div>
+  <div class="sig-pray-wrap">
+    <ol class="sig-pray" id="sigPray"></ol>
+    <button class="sig-loc" id="sigLoc" type="button">Surabaya</button>
+  </div>
+</section>
+
+<main class="layout">
+  <section class="stagepane">
+    <div class="stage" id="stage" tabindex="0" aria-label="Pemutar video. Panah atas dan bawah untuk ganti channel.">
+      <video id="video" playsinline></video>
+
+      <div class="idle" id="idle">
+        <svg class="idle-mark" viewBox="0 0 100 100" aria-hidden="true">
+          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22D3EE"/><stop offset="1" stop-color="#A855F7"/></linearGradient></defs>
+          <path d="M32 22 L78 50 L32 78 Z" fill="none" stroke="url(#g)" stroke-width="7" stroke-linejoin="round"/>
+        </svg>
+        <p id="idleText">Pilih channel untuk mulai menonton</p>
+      </div>
+
+      <div class="spinner" id="spinner" hidden><i></i></div>
+
+      <div class="osd" id="osd" aria-hidden="true">
+        <span class="osd-no" id="osdNo"></span>
+        <span class="osd-name" id="osdName"></span>
+      </div>
+
+      <div class="msg" id="msg" role="alert" hidden>
+        <h2 id="msgTitle"></h2>
+        <p id="msgBody"></p>
+        <div class="msg-actions">
+          <button class="btn" id="retryBtn">Coba lagi</button>
+          <button class="btn ghost" id="copyBtn">Salin alamat stream</button>
+          <button class="btn ghost" id="nextBtn">Channel berikutnya</button>
+        </div>
+      </div>
+
+      <div class="controls" id="controls">
+        <button class="ic" id="prevBtn" title="Channel sebelumnya (↓)" aria-label="Channel sebelumnya"><svg viewBox="0 0 24 24"><path d="M6 6v12M18 6 9 12l9 6z"/></svg></button>
+        <button class="ic" id="playBtn" title="Putar/jeda (spasi)" aria-label="Putar atau jeda"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5v14l12-7z"/></svg></button>
+        <button class="ic" id="nextChBtn" title="Channel berikutnya (↑)" aria-label="Channel berikutnya"><svg viewBox="0 0 24 24"><path d="M18 6v12M6 6l9 6-9 6z"/></svg></button>
+        <span class="live" id="liveTag" hidden><i></i>Live</span>
+        <span class="grow"></span>
+        <button class="ic" id="muteBtn" title="Suara (M)" aria-label="Nyalakan atau matikan suara"><svg viewBox="0 0 24 24" id="muteIcon"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg></button>
+        <button class="ic" id="favBtn" title="Favorit (S)" aria-label="Tambah ke favorit" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg></button>
+        <button class="ic" id="pipBtn" title="Picture-in-picture" aria-label="Picture in picture"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg></button>
+        <button class="ic" id="fsBtn" title="Layar penuh (F)" aria-label="Layar penuh"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      </div>
+    </div>
+
+    <div class="now" id="now">
+      <div class="now-main">
+        <span class="now-no" id="nowNo"></span>
+        <div>
+          <h1 id="nowName">Belum ada channel</h1>
+          <p id="nowMeta">Tambahkan playlist M3U untuk mulai.</p>
+        </div>
+      </div>
+      <p class="keys">↑ ↓ ganti channel, angka untuk lompat ke nomor, F layar penuh, S favorit</p>
+    </div>
+  </section>
+
+  <nav class="groups" id="groups" aria-label="Kategori"></nav>
+
+  <section class="listpane">
+    <div class="list-head"><span id="listCount"></span></div>
+    <div class="list" id="list" role="listbox" aria-label="Daftar channel"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  <a href="https://zandev.id" target="_blank" rel="noopener">Design × Code by <b>Zandev</b></a>
+  <span>ZanTV · jadwal shalat metode Kemenag RI</span>
+</footer>
+
+<dialog class="sheet" id="plDialog" aria-labelledby="plTitle">
+  <form method="dialog" class="sheet-head">
+    <h2 id="plTitle">Playlist</h2>
+    <button class="ic" value="close" aria-label="Tutup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </form>
+  <ul class="pl-list" id="plList"></ul>
+  <div class="pl-add" id="plAdmin" hidden>
+    <h3>Tambah dari alamat</h3>
+    <p class="hint">Server ZanTV yang mengambil playlist ini, lalu semua pengguna bisa memakainya.</p>
+    <label>Nama<input id="plName" placeholder="Misalnya: TV Indonesia"></label>
+    <label>Alamat playlist (.m3u / .m3u8)<input id="plUrl" type="url" placeholder="https://contoh.com/playlist.m3u" inputmode="url"></label>
+    <button class="btn" id="plAddUrl">Tambah dan buka</button>
+    <h3>Atau dari file di perangkat</h3>
+    <p class="hint">Cocok kalau server playlist menolak diakses dari browser: unduh dulu file-nya, lalu buka di sini.</p>
+    <label class="btn ghost file">Buka file M3U<input id="plFile" type="file" accept=".m3u,.m3u8,.txt,audio/x-mpegurl,application/vnd.apple.mpegurl"></label>
+  </div>
+</dialog>
+
+ <dialog class="sheet" id="acctDialog" aria-labelledby="acctTitle">
+  <form method="dialog" class="sheet-head">
+    <h2 id="acctTitle">Akun</h2>
+    <button class="ic" value="close" aria-label="Tutup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </form>
+  <div class="pl-add acct">
+    <div class="acct-me">
+      <div><strong id="acctName"></strong><span id="acctRole"></span></div>
+      <button class="btn ghost" id="logoutBtn" type="button">Keluar</button>
+    </div>
+    <h3>Ganti kata sandi</h3>
+    <label>Kata sandi sekarang<input id="pwCur" type="password" autocomplete="current-password"></label>
+    <label>Kata sandi baru (minimal 8 karakter)<input id="pwNew" type="password" autocomplete="new-password"></label>
+    <button class="btn" id="pwSave" type="button">Simpan kata sandi</button>
+
+    <div id="adminUsers" hidden>
+      <h3>Pengguna</h3>
+      <ul class="pl-list user-list" id="userList"></ul>
+      <h3>Tambah pengguna</h3>
+      <label>Nama pengguna<input id="nuName" autocapitalize="none" spellcheck="false" placeholder="huruf kecil, angka, titik, _ atau -"></label>
+      <label>Kata sandi (minimal 8 karakter)<input id="nuPass" type="password" autocomplete="new-password"></label>
+      <label>Peran
+        <select id="nuRole">
+          <option value="user">User: hanya menonton</option>
+          <option value="admin">Admin: kelola playlist dan pengguna</option>
+        </select>
+      </label>
+      <button class="btn" id="nuAdd" type="button">Tambah pengguna</button>
+    </div>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="zan-sig.js?v=1.2.2"></script>
+<script src="app.js?v=1.2.2"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+[Unit]
+Description=ZanTV API (login dan playlist)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zantv
+Group=zantv
+Environment=ZANTV_DATA=/var/lib/zantv
+Environment=PORT=8090
+ExecStart=/usr/bin/node /opt/zantv-api/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/zantv
+
+[Install]
+WantedBy=multi-user.target

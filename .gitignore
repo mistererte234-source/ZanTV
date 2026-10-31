@@ -1,0 +1,19 @@
+# data server (akun, sesi, playlist) jangan pernah masuk repo
+db.json
+db.json.tmp
+playlists/
+*.m3u
+*.m3u8
+
+# kunci dan rahasia
+.env
+*.pem
+*.key
+
+# sistem
+.DS_Store
+Thumbs.db
+desktop.ini
+node_modules/
+*.log
+*.zip
