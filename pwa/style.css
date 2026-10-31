@@ -534,3 +534,14 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .act-table td:nth-child(4), .act-table td.ip { font-size: 12px; color: var(--muted); }
   .live-item { min-width: 0; width: 100%; }
 }
+
+/* ---------- v1.5: ubah playlist ---------- */
+.pl-list li.is-editing { display: block; padding: 6px 0 10px; }
+.pl-edit { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--r-md); background: var(--panel-2); border: 1px solid var(--line); }
+.pl-edit label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.pl-edit input { background: var(--ink); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; color: var(--text); }
+.pl-edit input:focus { border-color: var(--cyan); outline: none; }
+.pl-edit .hint { margin: 0; }
+.pl-edit-actions { display: flex; gap: 8px; }
+.pl-edit-actions .btn { height: 38px; }
+.pl-edit-actions .btn:disabled { opacity: .6; }

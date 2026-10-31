@@ -1026,6 +1026,7 @@ $('#acctBtn').addEventListener('click', openAccount);
 /* Dialog playlist                                                     */
 /* ------------------------------------------------------------------ */
 var ICON_DEL = '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/></svg>';
+var ICON_EDIT = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/></svg>';
 var ICON_REFRESH = '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>';
 
 function renderPlaylistDialog() {
@@ -1039,17 +1040,54 @@ function renderPlaylistDialog() {
     if (p.httpsChecked) meta += (p.httpLeft ? ' · ' + p.httpLeft + ' alamat masih http' : ' · semua https');
     else if (p.httpsChecked === 0 || p.httpsChecked === undefined) meta += ' · sedang dicek https…';
     var tools = isAdmin()
-      ? (p.kind === 'url' ? '<button class="ic" data-refresh="' + esc(p.id) + '" aria-label="Perbarui ' + esc(p.name) + '" title="Ambil ulang dari alamatnya">' + ICON_REFRESH + '</button>' : '') +
+      ? '<button class="ic" data-edit="' + esc(p.id) + '" aria-label="Ubah ' + esc(p.name) + '" title="Ubah nama atau alamat">' + ICON_EDIT + '</button>' +
+        (p.kind === 'url' ? '<button class="ic" data-refresh="' + esc(p.id) + '" aria-label="Perbarui ' + esc(p.name) + '" title="Ambil ulang dari alamatnya">' + ICON_REFRESH + '</button>' : '') +
         '<button class="ic" data-del="' + esc(p.id) + '" aria-label="Hapus playlist ' + esc(p.name) + '" title="Hapus">' + ICON_DEL + '</button>'
       : '';
     return '<li><button class="pl-item" data-id="' + esc(p.id) + '" aria-current="' + (p.id === S.activeId) + '"><strong>' +
       esc(p.name) + '</strong><span>' + esc(isAdmin() ? meta : p.count + ' channel') + '</span></button>' + tools + '</li>';
   }).join('');
 }
+function openEdit(id, li) {
+  var p = S.playlists.filter(function (x) { return x.id === id; })[0];
+  if (!p || !li) return;
+  li.className = 'is-editing';
+  li.innerHTML = '<form class="pl-edit">' +
+    '<label>Nama<input name="name" value="' + esc(p.name) + '" maxlength="80" required></label>' +
+    '<label>Alamat playlist' + (p.kind === 'file' ? ' (kosongkan kalau tetap dari file)' : '') +
+    '<input name="url" type="url" inputmode="url" placeholder="https://contoh.com/playlist.m3u" value="' + esc(p.kind === 'url' ? p.source : '') + '"></label>' +
+    '<p class="hint">Kalau alamatnya diganti, server mengambil ulang isi playlist dari alamat baru.</p>' +
+    '<div class="pl-edit-actions"><button class="btn primary" type="submit">Simpan</button><button class="btn ghost" type="button" data-cancel>Batal</button></div></form>';
+  var form = li.querySelector('form');
+  form.elements.name.focus();
+  form.querySelector('[data-cancel]').addEventListener('click', renderPlaylistDialog);
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var name = form.elements.name.value.trim();
+    var url = form.elements.url.value.trim();
+    if (!name) { toast('Nama playlist tidak boleh kosong'); return; }
+    if (url && !/^https?:\/\//i.test(url)) { toast('Alamat harus diawali http:// atau https://'); return; }
+    var body = { name: name };
+    if (url && url !== p.source) body.url = url;
+    var btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    if (body.url) toast('Mengambil playlist dari alamat baru…');
+    api('PATCH', '/api/playlists/' + id, body).then(function (np) {
+      S.playlists = S.playlists.map(function (x) { return x.id === np.id ? np : x; });
+      renderPlaylistDialog();
+      setPlaylistLabel();
+      toast(body.url ? 'Disimpan: ' + np.count + ' channel dari alamat baru' : 'Nama playlist disimpan');
+      if (body.url && np.id === S.activeId) loadPlaylist(np);
+    }).catch(function (err) { btn.disabled = false; toast(err.message); });
+  });
+}
 function openDialog() {
   renderPlaylistDialog();
   el.dialog.showModal();
 }
+el.dialog.addEventListener('cancel', function (e) {
+  if (el.plList.querySelector('.pl-edit')) { e.preventDefault(); renderPlaylistDialog(); }
+});
 el.plList.addEventListener('click', function (e) {
   var del = e.target.closest('[data-del]');
   var ref = e.target.closest('[data-refresh]');
@@ -1059,6 +1097,9 @@ el.plList.addEventListener('click', function (e) {
     return;
   }
   if (ref) { adminRefresh(ref.dataset.refresh); return; }
+  var ed = e.target.closest('[data-edit]');
+  if (ed) { openEdit(ed.dataset.edit, ed.closest('li')); return; }
+  if (e.target.closest('.pl-edit')) return;
   var it = e.target.closest('.pl-item');
   if (it) { el.dialog.close(); if (it.dataset.id !== S.activeId) activate(it.dataset.id); }
 });

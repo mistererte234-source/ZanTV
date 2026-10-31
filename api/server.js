@@ -363,6 +363,25 @@ async function handle(req, res) {
       upgradePlaylist(pl.id);
       return send(res, 200, pl);
     }
+    if (!m[2] && method === 'PATCH') {
+      needAdmin();
+      const b = await readBody(req, 8192);
+      const name = b.name != null ? String(b.name).trim().slice(0, 80) : pl.name;
+      if (!name) throw fail(400, 'Nama playlist tidak boleh kosong');
+      const newUrl = b.url != null ? String(b.url).trim() : '';
+      if (newUrl && newUrl !== pl.source) {
+        const text = await fetchM3U(newUrl).catch((e) => { throw fail(502, e.message); });
+        const count = countChannels(text);
+        if (!count) throw fail(422, 'Isinya bukan playlist M3U atau tidak berisi channel');
+        fs.writeFileSync(file, text);
+        Object.assign(pl, { kind: 'url', source: newUrl, count, updatedAt: Date.now(), httpsChecked: 0, httpUpgraded: 0, httpLeft: 0 });
+        pl.name = name; save();
+        upgradePlaylist(pl.id);
+      } else {
+        pl.name = name; save();
+      }
+      return send(res, 200, pl);
+    }
     if (!m[2] && method === 'DELETE') {
       needAdmin();
       db.playlists = db.playlists.filter((x) => x.id !== pl.id); save();
