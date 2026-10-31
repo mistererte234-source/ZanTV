@@ -826,3 +826,38 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .pl-edit-actions { display: flex; gap: 8px; }
 .pl-edit-actions .btn { height: 38px; }
 .pl-edit-actions .btn:disabled { opacity: .6; }
+
+/* ---------- Mode Layar Penuh Otomatis Rotasi (2-in-1 Laptop Landscape/Portrait) ---------- */
+body.stage-theater-fullscreen {
+  overflow: hidden !important;
+}
+body.stage-theater-fullscreen .stage {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  border-radius: 0 !important;
+  z-index: 9999 !important;
+  background: #000 !important;
+}
+body.stage-theater-fullscreen .stage video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+body.stage-theater-fullscreen .stage::before {
+  display: none !important;
+}
+body.stage-theater-fullscreen .top,
+body.stage-theater-fullscreen .sig-ribbon,
+body.stage-theater-fullscreen .sports-ticker,
+body.stage-theater-fullscreen .groups,
+body.stage-theater-fullscreen .listpane,
+body.stage-theater-fullscreen .now,
+body.stage-theater-fullscreen .foot {
+  display: none !important;
+}
+

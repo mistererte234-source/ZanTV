@@ -784,23 +784,116 @@ function syncMute() {
   el.muteIcon.innerHTML = m ? '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="m17 9 5 6M22 9l-5 6"/>' : '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/>';
 }
 
-function isFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
-function toggleFullscreen() {
-  if (isFullscreen()) {
-    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    return;
-  }
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || document.body.classList.contains('stage-theater-fullscreen'));
+}
+
+function enterFullscreen() {
+  if (isFullscreen()) return;
   var req = el.stage.requestFullscreen || el.stage.webkitRequestFullscreen;
   if (req) {
-    var p = req.call(el.stage);
-    if (p && p.then) p.then(lockLandscape).catch(function () {});
-  } else if (el.video.webkitEnterFullscreen) {
-    el.video.webkitEnterFullscreen(); // iPhone
+    try {
+      var p = req.call(el.stage);
+      if (p && p.then) {
+        p.then(lockLandscape).catch(function () {
+          document.body.classList.add('stage-theater-fullscreen');
+        });
+      }
+    } catch (e) {
+      document.body.classList.add('stage-theater-fullscreen');
+    }
+  } else if (el.video && el.video.webkitEnterFullscreen) {
+    try { el.video.webkitEnterFullscreen(); } catch (e) {}
+  } else {
+    document.body.classList.add('stage-theater-fullscreen');
   }
 }
+
+function exitFullscreen() {
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    try {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } catch (e) {}
+  }
+  document.body.classList.remove('stage-theater-fullscreen');
+}
+
+function toggleFullscreen() {
+  if (isFullscreen()) {
+    exitFullscreen();
+  } else {
+    enterFullscreen();
+  }
+}
+
 function lockLandscape() {
   try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(function () {}); } catch (e) {}
 }
+
+/* Event sync saat fullscreen berubah atau ESC ditekan */
+document.addEventListener('fullscreenchange', function () {
+  if (!document.fullscreenElement) document.body.classList.remove('stage-theater-fullscreen');
+});
+document.addEventListener('webkitfullscreenchange', function () {
+  if (!document.webkitFullscreenElement) document.body.classList.remove('stage-theater-fullscreen');
+});
+window.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && document.body.classList.contains('stage-theater-fullscreen')) {
+    exitFullscreen();
+  }
+});
+
+/* Rotasi Otomatis (Landscape -> Fullscreen, Portrait -> Tampilan Asli) */
+(function initAutoFullscreenOnRotate() {
+  var prevOrientation = null;
+
+  function getOrientation() {
+    if (screen.orientation && screen.orientation.type) {
+      return screen.orientation.type.indexOf('landscape') === 0 ? 'landscape' : 'portrait';
+    }
+    if (window.matchMedia) {
+      return window.matchMedia('(orientation: landscape)').matches ? 'landscape' : 'portrait';
+    }
+    return window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
+  }
+
+  function handleOrientation() {
+    var current = getOrientation();
+    if (prevOrientation && prevOrientation !== current) {
+      if (current === 'landscape') {
+        if (S.playing || S.cued) {
+          enterFullscreen();
+          toast('Mode Landscape: Layar penuh otomatis');
+        }
+      } else if (current === 'portrait') {
+        if (isFullscreen()) {
+          exitFullscreen();
+          toast('Mode Portrait: Kembali ke tampilan normal');
+        }
+      }
+    }
+    prevOrientation = current;
+  }
+
+  prevOrientation = getOrientation();
+
+  if (screen.orientation && screen.orientation.addEventListener) {
+    screen.orientation.addEventListener('change', handleOrientation);
+  } else {
+    window.addEventListener('orientationchange', handleOrientation);
+  }
+
+  if (window.matchMedia) {
+    try {
+      var mql = window.matchMedia('(orientation: landscape)');
+      if (mql.addEventListener) {
+        mql.addEventListener('change', handleOrientation);
+      } else if (mql.addListener) {
+        mql.addListener(handleOrientation);
+      }
+    } catch (e) {}
+  }
+})();
 
 /* sembunyikan kontrol saat diam */
 var idleUiTimer;
