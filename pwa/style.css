@@ -463,3 +463,74 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .locbanner p { margin: 0; font-size: 13.5px; color: var(--muted); }
 .locbanner strong { color: var(--text); }
 .locbanner div { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- v1.4: pesan error tidak menumpuk kontrol ---------- */
+.stage.has-msg .controls { display: none; }
+.pl-tools { padding: 4px 22px 0; }
+.pl-tools .btn { height: 36px; font-size: 13.5px; }
+
+/* ---------- v1.4: tampilan HP ---------- */
+@media (max-width: 860px) {
+  /* header satu baris: logo kiri, tombol kanan; pencarian di bawahnya */
+  .top { padding: 10px 14px 8px; gap: 8px; }
+  .brand img { width: 30px; height: 30px; }
+  .wordmark { font-size: 20px; }
+  #refreshBtn { display: none; }
+  .top .btn { height: 38px; }
+  #acctBtn { width: 38px; }
+  #playlistBtn { padding: 0 12px; gap: 6px; font-size: 14px; max-width: 46vw; }
+  #playlistName { max-width: 100%; }
+  .search { order: 3; flex-basis: 100%; }
+  .search input { padding: 9px 0; }
+
+  /* bar waktu & shalat ringkas */
+  .sig { margin: 0 14px 10px; padding: 8px 10px; gap: 6px; }
+  .sig-now { flex-wrap: nowrap; gap: 10px; align-items: center; }
+  .sig-time span { font-size: 17px; }
+  .sig-time small { font-size: 10.5px; }
+  .sig-date { width: auto; min-width: 0; padding-left: 10px; border-left: 1px solid var(--line); }
+  .sig-date strong { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sig-date span { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sig-pray-wrap { flex-direction: row; align-items: center; gap: 4px; }
+  .sig-pray { flex: 1; gap: 2px; }
+  .sig-pray li { padding: 4px 2px; border-radius: 8px; font-size: 11px; row-gap: 0; }
+  .sig-pray li b { font-size: 12px; }
+  .sig-pray li small { font-size: 9.5px; }
+  .sig-loc { align-self: stretch; font-size: 0; width: 30px; padding: 0; border-radius: 8px; position: relative; flex: none; }
+  .sig-loc::before {
+    content: ""; position: absolute; inset: 0; margin: auto; width: 14px; height: 14px; background: var(--muted);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+
+  /* pesan error ringkas agar muat di layar video yang pendek */
+  .msg { padding: 12px 14px; gap: 4px; align-content: center; }
+  .msg h2 { font-size: 15px; }
+  .msg p { font-size: 12.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .msg-actions { gap: 6px; margin-top: 6px; }
+  .msg-actions .btn { height: 34px; padding: 0 12px; font-size: 13px; }
+
+  .now { gap: 4px; }
+  .now-main { gap: 10px; }
+
+  /* dialog jadi lembar dari bawah layar */
+  .sheet, .sheet.wide {
+    width: 100vw; max-width: 100vw; max-height: 92dvh; margin: auto 0 0; border-radius: 20px 20px 0 0;
+    border-left: 0; border-right: 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .sheet-head { padding: 14px 12px 4px 18px; position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  .pl-add, .act { padding-left: 18px; padding-right: 18px; }
+  .pl-tools { padding: 4px 18px 0; }
+
+  /* tabel aktivitas jadi kartu */
+  .act-filter select { flex: 1 1 140px; }
+  .act-table { border: 0; overflow: visible; }
+  .act-table table, .act-table tbody, .act-table tr, .act-table td { display: block; min-width: 0; width: 100%; }
+  .act-table thead { display: none; }
+  .act-table tr { border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; margin-bottom: 8px; background: var(--panel-2); }
+  .act-table td { padding: 2px 0; border: 0; }
+  .act-table td:first-child { font-size: 12px; }
+  .act-table td:nth-child(2) { font-weight: 700; }
+  .act-table td:nth-child(4), .act-table td.ip { font-size: 12px; color: var(--muted); }
+  .live-item { min-width: 0; width: 100%; }
+}

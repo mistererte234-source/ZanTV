@@ -666,6 +666,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   el.msgBody.textContent = x.body;
   el.msg.hidden = false;
+  el.stage.classList.add('has-msg');
   el.nowMeta.textContent = x.title;
   if (S.playing) track('play_error', { channel: S.playing.name, reason: x.title });
 }
@@ -684,7 +685,7 @@ function explain(info, ch) {
 }
 
 function setBusy(on) { el.spinner.hidden = !on; }
-function hideMsg() { el.msg.hidden = true; }
+function hideMsg() { el.msg.hidden = true; el.stage.classList.remove('has-msg'); }
 
 /* status video */
 el.video.addEventListener('playing', function () {
@@ -1017,6 +1018,7 @@ el.idle.addEventListener('click', function () { if (S.cued) play(S.cued); });
 })();
 
 $('#refreshBtn').addEventListener('click', function () { fetchPlaylists(false); });
+$('#plRefresh').addEventListener('click', function () { el.dialog.close(); fetchPlaylists(false); });
 $('#playlistBtn').addEventListener('click', openDialog);
 $('#acctBtn').addEventListener('click', openAccount);
 
@@ -1034,6 +1036,8 @@ function renderPlaylistDialog() {
   }
   el.plList.innerHTML = S.playlists.map(function (p) {
     var meta = p.count + ' channel, ' + (p.kind === 'file' ? 'dari file ' + p.source : p.source);
+    if (p.httpsChecked) meta += (p.httpLeft ? ' · ' + p.httpLeft + ' alamat masih http' : ' · semua https');
+    else if (p.httpsChecked === 0 || p.httpsChecked === undefined) meta += ' · sedang dicek https…';
     var tools = isAdmin()
       ? (p.kind === 'url' ? '<button class="ic" data-refresh="' + esc(p.id) + '" aria-label="Perbarui ' + esc(p.name) + '" title="Ambil ulang dari alamatnya">' + ICON_REFRESH + '</button>' : '') +
         '<button class="ic" data-del="' + esc(p.id) + '" aria-label="Hapus playlist ' + esc(p.name) + '" title="Hapus">' + ICON_DEL + '</button>'
@@ -1230,7 +1234,7 @@ function onLoggedOut() {
   E.token++;
   destroyEngine();
   S.playing = null; S.cued = null; S.channels = []; S.view = []; S.playlists = [];
-  el.idle.hidden = false; el.msg.hidden = true; setBusy(false);
+  el.idle.hidden = false; hideMsg(); setBusy(false);
   el.stage.classList.remove('is-playing');
   if (el.dialog.open) el.dialog.close();
   if (acct.open) acct.close();

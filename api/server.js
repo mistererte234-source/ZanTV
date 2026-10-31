@@ -133,6 +133,84 @@ async function fetchM3U(u) {
   }
   throw new Error('Terlalu banyak pengalihan alamat');
 }
+/* ---------------- ubah http → https otomatis ----------------
+ * Untuk setiap alamat stream http di playlist, server mencoba versi https-nya.
+ * Yang berhasil dijawab server tujuan (dengan sertifikat sah) diganti di playlist.
+ */
+const hostOk = new Map(); // host → { ok, ts } supaya DNS tidak dicek berulang
+async function publicHost(url) {
+  const h = url.hostname;
+  const c = hostOk.get(h);
+  if (c && Date.now() - c.ts < 10 * 60 * 1000) return c.ok;
+  let ok = false;
+  try { await assertPublicUrl(url.toString()); ok = true; } catch (e) {}
+  hostOk.set(h, { ok, ts: Date.now() });
+  return ok;
+}
+async function httpsWorks(httpUrl) {
+  let u;
+  try { u = new URL(httpUrl); } catch (e) { return false; }
+  if (u.protocol !== 'http:') return false;
+  u.protocol = 'https:';
+  if (!(await publicHost(u))) return false;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 7000);
+  try {
+    const r = await fetch(u, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'ZanTV/1.4' } });
+    ctrl.abort(); // cukup lihat jawabannya, tidak perlu mengunduh isi stream
+    return r.status >= 200 && r.status < 400;
+  } catch (e) {
+    return false;
+  } finally { clearTimeout(timer); }
+}
+function streamUrls(text) {
+  const out = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    const l = line.trim();
+    if (l && l[0] !== '#' && /^http:\/\//i.test(l)) out.push(l.split('|')[0]);
+  }
+  return out;
+}
+const upgrading = new Set();
+async function upgradePlaylist(id) {
+  if (upgrading.has(id)) return;
+  upgrading.add(id);
+  try {
+    let pl = db.playlists.find((x) => x.id === id);
+    if (!pl) return;
+    const file = path.join(PL_DIR, id + '.m3u');
+    const text = fs.readFileSync(file, 'utf8');
+    const urls = Array.from(new Set(streamUrls(text)));
+    const good = new Set();
+    let i = 0;
+    async function worker() {
+      while (i < urls.length) {
+        const u = urls[i++];
+        if (await httpsWorks(u)) good.add(u);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(10, urls.length) }, worker));
+    // tulis ulang hanya baris alamat stream yang terbukti bisa https
+    const lines = text.split(/(\r?\n)/);
+    for (let k = 0; k < lines.length; k++) {
+      const l = lines[k].trim();
+      if (!l || l[0] === '#') continue;
+      const base = l.split('|')[0];
+      if (good.has(base)) lines[k] = lines[k].replace(/http:\/\//i, 'https://');
+    }
+    load();
+    pl = db.playlists.find((x) => x.id === id);
+    if (!pl) return; // dihapus selama pengecekan
+    if (good.size) fs.writeFileSync(file, lines.join(''));
+    Object.assign(pl, { httpsChecked: Date.now(), httpUpgraded: good.size, httpLeft: urls.length - good.size });
+    if (good.size) pl.updatedAt = Date.now();
+    save();
+    console.log(`Playlist ${pl.name}: ${good.size} alamat diganti ke https, ${urls.length - good.size} tetap http`);
+  } catch (e) {
+    console.error('Cek https gagal:', e.message);
+  } finally { upgrading.delete(id); }
+}
+
 function countChannels(text) {
   let n = 0;
   for (const line of String(text).split(/\r?\n/)) {
@@ -281,7 +359,8 @@ async function handle(req, res) {
       const count = countChannels(text);
       if (!count) throw fail(422, 'Isinya bukan playlist M3U atau tidak berisi channel');
       fs.writeFileSync(file, text);
-      Object.assign(pl, { count, updatedAt: Date.now() }); save();
+      Object.assign(pl, { count, updatedAt: Date.now(), httpsChecked: 0 }); save();
+      upgradePlaylist(pl.id);
       return send(res, 200, pl);
     }
     if (!m[2] && method === 'DELETE') {
@@ -307,6 +386,7 @@ async function handle(req, res) {
     const pl = { id: crypto.randomBytes(6).toString('hex'), name, kind, source, count, updatedAt: Date.now() };
     fs.writeFileSync(path.join(PL_DIR, pl.id + '.m3u'), text);
     db.playlists.push(pl); save();
+    upgradePlaylist(pl.id);
     return send(res, 201, pl);
   }
 
@@ -405,6 +485,10 @@ function askHidden(q) {
 }
 async function cli(args) {
   const [cmd, name, role] = args;
+  if (cmd === 'upgrade-https') {
+    for (const pl of db.playlists) { console.log('Mengecek ' + pl.name + ' …'); await upgradePlaylist(pl.id); }
+    return;
+  }
   if (cmd === 'list-users') {
     const names = Object.keys(db.users).sort();
     if (!names.length) console.log('(belum ada akun)');
@@ -449,4 +533,5 @@ if (process.argv[2]) {
   }).listen(PORT, HOST, () => console.log(`ZanTV API jalan di http://${HOST}:${PORT} (data: ${DATA_DIR})`));
   pruneLog();
   setInterval(pruneLog, 6 * 3600 * 1000).unref();
+  db.playlists.filter((pl) => !pl.httpsChecked).forEach((pl) => upgradePlaylist(pl.id));
 }

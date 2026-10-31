@@ -32,3 +32,11 @@ Disimpan di `/var/lib/zantv/activity.jsonl`, dihapus otomatis setelah 90 hari (u
 Yang dicatat: masuk, gagal masuk, keluar, channel yang ditonton beserta durasinya, gagal memutar, dan lokasi GPS
 hanya jika pengguna menyetujuinya. Setiap catatan menyimpan waktu, alamat IP, dan perangkat (dari user agent).
 Pengguna diberi tahu di layar login. Admin melihatnya lewat menu Akun → Lihat aktivitas pengguna.
+
+## Ubah http ke https otomatis (v1.4)
+Setiap kali playlist ditambah atau diperbarui, server mencoba versi https dari setiap alamat stream http.
+Yang berhasil dijawab dengan sertifikat sah langsung diganti di playlist; sisanya tetap http.
+Playlist lama dicek otomatis saat server menyala. Untuk mengecek ulang semua playlist secara manual:
+```
+sudo -u zantv ZANTV_DATA=/var/lib/zantv node /opt/zantv-api/server.js upgrade-https
+```
