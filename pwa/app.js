@@ -716,18 +716,59 @@ function startNative(url) {
   el.video.src = url;
 }
 
+function healBufferGap() {
+  try {
+    var b = el.video.buffered;
+    if (!b || !b.length) return false;
+    var cur = el.video.currentTime;
+    if (b.length > 1) {
+      var lastStart = b.start(b.length - 1);
+      var lastEnd = b.end(b.length - 1);
+      if (lastEnd - lastStart > 0.3 && cur < lastStart - 0.1) {
+        el.video.currentTime = lastStart + 0.15;
+        el.video.play().catch(function () {});
+        return true;
+      }
+    }
+    for (var i = 0; i < b.length; i++) {
+      if (b.start(i) > cur + 0.25 && b.end(i) - b.start(i) > 0.3) {
+        el.video.currentTime = b.start(i) + 0.15;
+        el.video.play().catch(function () {});
+        return true;
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
 function startHls(url, token) {
   var nativeHls = el.video.canPlayType('application/vnd.apple.mpegurl');
   if (nativeHls && !window.MediaSource && !window.ManagedMediaSource) { startNative(url); return Promise.resolve(); }
   return loadLib('hls').then(function () {
     if (token !== E.token) return;
     if (!window.Hls || !Hls.isSupported()) { startNative(url); return; }
-    var hls = new Hls({ enableWorker: true, backBufferLength: 30, manifestLoadingMaxRetry: 1, levelLoadingMaxRetry: 2, fragLoadingMaxRetry: 3 });
+    var hls = new Hls({
+      enableWorker: true,
+      backBufferLength: 30,
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      maxBufferHole: 1.5,
+      liveSyncDurationCount: 4,
+      liveMaxLatencyDurationCount: 10,
+      manifestLoadingMaxRetry: 4,
+      levelLoadingMaxRetry: 4,
+      fragLoadingMaxRetry: 6
+    });
     E.hls = hls; E.mode = 'hls';
-    var recovered = false;
+    var recovered = 0;
     hls.on(Hls.Events.ERROR, function (_, d) {
       if (!d.fatal || token !== E.token) return;
-      if (d.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) { recovered = true; hls.recoverMediaError(); return; }
+      if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recovered < 3) {
+        recovered++;
+        if (recovered === 2) hls.swapAudioCodec();
+        hls.recoverMediaError();
+        return;
+      }
       if (d.details === 'manifestParsingError' && !E.tsFallback && (window.MediaSource || window.ManagedMediaSource)) {
         // bukan manifest HLS → coba sebagai stream MPEG-TS (mpegts.js)
         E.tsFallback = true;
@@ -787,11 +828,27 @@ function startTs(url, type, token) {
     var isSameOrigin = absUrl.indexOf(location.origin) === 0;
     var p = mpegts.createPlayer(
       { type: type, isLive: true, url: absUrl, cors: !isSameOrigin, withCredentials: isSameOrigin },
-      { enableWorker: false, enableStashBuffer: false, liveBufferLatencyChasing: true, lazyLoad: false, autoCleanupSourceBuffer: true }
+      {
+        enableWorker: false,
+        enableStashBuffer: true,
+        stashInitialSize: 512 * 1024,
+        liveBufferLatencyChasing: false,
+        liveSync: false,
+        fixAudioTimestampGap: true,
+        lazyLoad: false,
+        autoCleanupSourceBuffer: true,
+        autoCleanupMaxBackwardDuration: 60,
+        autoCleanupMinBackwardDuration: 30
+      }
     );
     E.ts = p; E.mode = 'mpegts';
+    var mediaRecuperated = 0;
     p.on(mpegts.Events.ERROR, function (type2, detail, info) {
       if (token !== E.token) return;
+      if (type2 === mpegts.ErrorTypes.MEDIA_ERROR && mediaRecuperated < 3) {
+        mediaRecuperated++;
+        if (healBufferGap()) return;
+      }
       fail({ kind: type2 === mpegts.ErrorTypes.NETWORK_ERROR ? 'network' : 'media', code: info && info.code, detail: (info && info.msg) || detail }, token);
     });
     p.attachMediaElement(el.video);
@@ -877,7 +934,7 @@ function fail(info, token) {
     E.retries++;
     var ch = S.playing;
     el.nowMeta.textContent = 'Sinyal terputus, mencoba lagi (' + E.retries + ' dari 2)…';
-    setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy }); }, 1500 * E.retries);
+    setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy }); }, 2500 * E.retries);
     return;
   }
   destroyEngine();
@@ -916,10 +973,19 @@ el.video.addEventListener('playing', function () {
   el.liveTag.hidden = false; syncPlay(); updateNow();
 });
 el.video.addEventListener('waiting', function () {
+  if (healBufferGap()) { setBusy(false); return; }
   setBusy(true);
   var token = E.token;
+  setTimeout(function () { if (token === E.token && el.video.readyState < 3 && healBufferGap()) setBusy(false); }, 600);
   clearTimeout(E.stall);
-  E.stall = setTimeout(function () { if (token === E.token && el.video.readyState < 3) fail({ kind: 'network' }, token); }, 20000);
+  E.stall = setTimeout(function () {
+    if (token !== E.token || el.video.readyState >= 3) return;
+    if (healBufferGap()) { setBusy(false); return; }
+    fail({ kind: 'network' }, token);
+  }, 35000);
+});
+el.video.addEventListener('stalled', function () {
+  healBufferGap();
 });
 el.video.addEventListener('pause', syncPlay);
 el.video.addEventListener('timeupdate', function () {

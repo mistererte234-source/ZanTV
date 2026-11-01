@@ -561,6 +561,7 @@ function readBody(req, limit) {
 }
 const publicUser = (name) => ({ name, role: db.users[name].role, created: db.users[name].created });
 const fail = (status, message) => Object.assign(new Error(message), { status });
+const activeStreamLocks = new Map();
 
 async function handle(req, res) {
   load(); // ikut membaca perubahan dari perintah CLI tanpa restart
@@ -683,7 +684,7 @@ async function handle(req, res) {
     return send(res, 201, pl);
   }
 
-  /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U (Referer, Origin, User-Agent) */
+  /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U, anti multi-connect MAC, dan penyambung TS otomatis */
   if (p === '/api/stream' && method === 'GET') {
     const rawU = url.searchParams.get('u') || '';
     const ua = (url.searchParams.get('ua') || '').slice(0, 300);
@@ -692,22 +693,43 @@ async function handle(req, res) {
     const initialTarget = await assertPublicUrl(rawU).catch((e) => { throw fail(400, e.message); });
     const isTsLike = isDirectStreamUrl(rawU);
 
+    // Cegah multi-connect pada server Stalker/MAC: putus koneksi lama pada MAC/sesi yang sama sebelum buka yang baru
+    const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);
+    const lockKey = isTsLike
+      ? (macMatch ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase() : 'ts:' + me.key)
+      : '';
+    if (lockKey && activeStreamLocks.has(lockKey)) {
+      try { activeStreamLocks.get(lockKey).kill(); } catch (e) {}
+      activeStreamLocks.delete(lockKey);
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
     const VLC_UA = 'VLC/3.0.20 LibVLC/3.0.20';
     const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     const primaryUa = ua || (isTsLike ? VLC_UA : CHROME_UA);
     const fallbackUa = ua ? '' : (isTsLike ? CHROME_UA : VLC_UA);
 
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 25000);
+    let clientClosed = false;
+    let currentAc = new AbortController();
     let pipeStream = null;
-    req.on('close', () => {
-      ac.abort();
+    const killUpstream = () => {
+      clientClosed = true;
+      try { currentAc.abort(); } catch (e) {}
       if (pipeStream) { try { pipeStream.destroy(); } catch (e) {} }
+    };
+    const lockObj = { kill: killUpstream };
+    if (lockKey) activeStreamLocks.set(lockKey, lockObj);
+    req.on('close', () => {
+      killUpstream();
+      if (lockKey && activeStreamLocks.get(lockKey) === lockObj) activeStreamLocks.delete(lockKey);
     });
 
     const uIp = clientIp(req);
-    async function connectUpstream(useUa, sendClientIp) {
-      let curTarget = initialTarget;
+    async function connectUpstream(useUa, sendClientIp, startUrl) {
+      let curTarget = startUrl || initialTarget;
+      const stepAc = new AbortController();
+      currentAc = stepAc;
+      const connTimer = setTimeout(() => stepAc.abort(), 20000);
       const reqHeaders = {
         'User-Agent': useUa,
         'Accept': '*/*'
@@ -725,22 +747,30 @@ async function handle(req, res) {
       if (req.headers['range'] && !isTsLike) reqHeaders['Range'] = req.headers['range'];
 
       const cookies = [];
-      for (let hop = 0; hop < 8; hop++) {
-        if (cookies.length) reqHeaders['Cookie'] = cookies.join('; ');
-        const r = await fetch(curTarget, { redirect: 'manual', signal: ac.signal, headers: reqHeaders });
-        const setCookie = typeof r.headers.getSetCookie === 'function' ? r.headers.getSetCookie() : (r.headers.get('set-cookie') ? [r.headers.get('set-cookie')] : []);
-        for (const sc of setCookie) {
-          const pair = String(sc).split(';')[0].trim();
-          if (pair && !cookies.includes(pair)) cookies.push(pair);
+      try {
+        for (let hop = 0; hop < 8; hop++) {
+          if (clientClosed) { clearTimeout(connTimer); return { res: null, target: curTarget, ac: stepAc }; }
+          if (cookies.length) reqHeaders['Cookie'] = cookies.join('; ');
+          const r = await fetch(curTarget, { redirect: 'manual', signal: stepAc.signal, headers: reqHeaders });
+          const setCookie = typeof r.headers.getSetCookie === 'function' ? r.headers.getSetCookie() : (r.headers.get('set-cookie') ? [r.headers.get('set-cookie')] : []);
+          for (const sc of setCookie) {
+            const pair = String(sc).split(';')[0].trim();
+            if (pair && !cookies.includes(pair)) cookies.push(pair);
+          }
+          if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
+            try { if (r.body) r.body.cancel(); } catch (e) {}
+            curTarget = await assertPublicUrl(new URL(r.headers.get('location'), curTarget).toString());
+            continue;
+          }
+          clearTimeout(connTimer);
+          return { res: r, target: curTarget, ac: stepAc };
         }
-        if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
-          try { if (r.body) r.body.cancel(); } catch (e) {}
-          curTarget = await assertPublicUrl(new URL(r.headers.get('location'), curTarget).toString());
-          continue;
-        }
-        return { res: r, target: curTarget };
+        clearTimeout(connTimer);
+        return { res: null, target: curTarget, ac: stepAc };
+      } catch (e) {
+        clearTimeout(connTimer);
+        throw e;
       }
-      return { res: null, target: curTarget };
     }
 
     const isRejectedTs = (r) => {
@@ -750,28 +780,29 @@ async function handle(req, res) {
       return isTsLike && c.includes('text/html');
     };
 
-    let upRes, target = initialTarget;
+    let upRes, target = initialTarget, chosenUa = primaryUa, chosenSendIp = false;
     try {
       let attempt = await connectUpstream(primaryUa, false);
       upRes = attempt.res;
       target = attempt.target;
       if (isRejectedTs(upRes) && uIp && !privateIp(uIp)) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        chosenSendIp = true;
         attempt = await connectUpstream(primaryUa, true);
         upRes = attempt.res;
         target = attempt.target;
       }
       if (isRejectedTs(upRes) && fallbackUa) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        chosenUa = fallbackUa;
+        chosenSendIp = true;
         attempt = await connectUpstream(fallbackUa, true);
         upRes = attempt.res;
         target = attempt.target;
       }
     } catch (e) {
-      clearTimeout(timer);
       throw fail(502, 'Gagal menghubungi server stream');
     }
-    clearTimeout(timer);
     if (!upRes) throw fail(502, 'Terlalu banyak pengalihan stream');
     if (!upRes.ok && upRes.status !== 206) {
       res.writeHead(upRes.status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -820,6 +851,106 @@ async function handle(req, res) {
         'X-Accel-Buffering': 'no'
       });
       return res.end(buf);
+    }
+
+    const isLiveTs = isTsLike || ct.includes('mp2t');
+    if (isLiveTs) {
+      res.writeHead(200, {
+        'Content-Type': 'video/mp2t',
+        'Cache-Control': 'no-store',
+        'X-Accel-Buffering': 'no'
+      });
+
+      // Pompa paket MPEG-TS dengan penyelarasan 188-byte (0x47) + auto-stitching saat upstream putus di tengah
+      const pumpTsAligned = async (body, stepAc) => {
+        if (!body) return 0;
+        const reader = body.getReader();
+        let rem = Buffer.alloc(0);
+        let synced = false;
+        let bytesSent = 0;
+        let idleTimer = null;
+        const resetIdle = () => {
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => { try { stepAc.abort(); } catch (e) {} }, 10000);
+        };
+        try {
+          resetIdle();
+          while (!clientClosed) {
+            const { value, done } = await reader.read();
+            if (done || clientClosed) break;
+            resetIdle();
+            if (!value || !value.byteLength) continue;
+            rem = rem.length ? Buffer.concat([rem, Buffer.from(value)]) : Buffer.from(value);
+            if (!synced) {
+              if (rem.length < 376) continue;
+              let syncPos = -1;
+              for (let i = 0; i + 188 < rem.length; i++) {
+                if (rem[i] === 0x47 && rem[i + 188] === 0x47) { syncPos = i; break; }
+              }
+              if (syncPos < 0) {
+                if (rem.length > 4096) rem = rem.subarray(rem.length - 188);
+                continue;
+              }
+              if (syncPos > 0) rem = rem.subarray(syncPos);
+              synced = true;
+            }
+            const alignedLen = Math.floor(rem.length / 188) * 188;
+            if (alignedLen > 0) {
+              const outChunk = rem.subarray(0, alignedLen);
+              rem = rem.subarray(alignedLen);
+              bytesSent += outChunk.length;
+              if (!res.write(outChunk)) {
+                await new Promise((r) => res.once('drain', r));
+              }
+            }
+          }
+        } catch (e) {
+          // upstream terputus atau idle timeout -> disambung oleh loop di bawah
+        } finally {
+          clearTimeout(idleTimer);
+          try { reader.cancel(); } catch (e) {}
+        }
+        return bytesSent;
+      };
+
+      let curBody = upRes.body;
+      let curAc = currentAc;
+      let lastDirectTarget = target !== initialTarget ? target : null;
+      let consecutiveDrops = 0;
+
+      while (!clientClosed && consecutiveDrops < 6) {
+        const sent = await pumpTsAligned(curBody, curAc);
+        if (clientClosed) break;
+        if (sent >= 188 * 20) consecutiveDrops = 0;
+        else consecutiveDrops++;
+
+        await new Promise((r) => setTimeout(r, 300));
+        if (clientClosed) break;
+
+        let reconnected = null;
+        // Coba sambung ulang lewat URL asal dulu (atau URL media langsung jika URL asal menolak re-token)
+        const targetsToTry = lastDirectTarget ? [initialTarget, lastDirectTarget] : [initialTarget];
+        for (const tUrl of targetsToTry) {
+          if (clientClosed) break;
+          try {
+            const att = await connectUpstream(chosenUa, chosenSendIp, tUrl);
+            if (att.res && att.res.ok && !isRejectedTs(att.res)) {
+              reconnected = att;
+              if (att.target && att.target !== initialTarget) lastDirectTarget = att.target;
+              break;
+            }
+            if (att.res && att.res.body) { try { att.res.body.cancel(); } catch (e) {} }
+          } catch (e) {}
+        }
+        if (!reconnected || !reconnected.res || !reconnected.res.body) {
+          consecutiveDrops++;
+          curBody = null;
+          continue;
+        }
+        curBody = reconnected.res.body;
+        curAc = reconnected.ac;
+      }
+      return res.end();
     }
 
     const outHeaders = {
