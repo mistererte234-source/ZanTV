@@ -1007,22 +1007,22 @@ function startTs(url, type, token) {
       {
         enableWorker: false,
         enableStashBuffer: true,
-        stashInitialSize: 768 * 1024,
+        stashInitialSize: 256 * 1024,
         isLive: true,
         lazyLoad: false,
         lazyLoadMaxDuration: 0,
         deferLoadAfterSourceOpen: false,
         liveBufferLatencyChasing: true,
-        liveBufferLatencyMaxLatency: 3.5,
-        liveBufferLatencyMinRemain: 0.8,
+        liveBufferLatencyMaxLatency: 4.0,
+        liveBufferLatencyMinRemain: 1.0,
         liveSync: true,
-        liveSyncMaxLatency: 4.0,
-        liveSyncTargetLatency: 1.5,
+        liveSyncMaxLatency: 4.5,
+        liveSyncTargetLatency: 1.8,
         fixAudioTimestampGap: true,
         accurateSeek: false,
         autoCleanupSourceBuffer: true,
-        autoCleanupMaxBackwardDuration: 45,
-        autoCleanupMinBackwardDuration: 20
+        autoCleanupMaxBackwardDuration: 30,
+        autoCleanupMinBackwardDuration: 15
       }
     );
     E.ts = p; E.mode = 'mpegts';

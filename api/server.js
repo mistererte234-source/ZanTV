@@ -1253,14 +1253,18 @@ async function handle(req, res) {
     if (isLiveTs) {
       res.writeHead(200, {
         'Content-Type': 'video/mp2t',
-        'Cache-Control': 'no-store',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no'
       });
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
       const ff = q ? startFfmpegPipe(q, null, chosenUa) : null;
       const outStream = (ff && ff.stdin) ? ff.stdin : res;
 
-      // Pompa paket MPEG-TS dengan penyelarasan 188-byte (0x47) + 64KB high-throughput chunking + auto-stitching
+      // Pompa paket MPEG-TS: kirim instan paket awal untuk startup kilat, lalu batch kelipatan 188 byte
       const pumpTsAligned = async (body, stepAc) => {
         if (!body) return 0;
         const reader = body.getReader();
@@ -1293,7 +1297,7 @@ async function handle(req, res) {
               if (syncPos > 0) rem = rem.subarray(syncPos);
               synced = true;
             }
-            // Kirim paket dalam kelipatan 188 byte (minimal 64KB per write jika buffer cukup agar I/O socket sangat efisien)
+            // Kirim paket langsung kelipatan 188 byte tanpa ditunda-tunda agar browser langsung memutar tanpa buffering
             const maxAligned = Math.floor(rem.length / 188) * 188;
             if (maxAligned > 0) {
               const outChunk = rem.subarray(0, maxAligned);
