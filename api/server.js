@@ -18,6 +18,15 @@ const net = require('net');
 const readline = require('readline');
 const zlib = require('zlib');
 const { Readable } = require('stream');
+const { spawn, execFileSync } = require('child_process');
+
+let HAS_FFMPEG = false;
+try {
+  execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 3000 });
+  HAS_FFMPEG = true;
+} catch (e) {}
+let activeFfmpegCount = 0;
+const MAX_FFMPEG = 3;
 
 const PORT = +(process.env.PORT || 8090);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -661,6 +670,47 @@ function readBody(req, limit) {
     req.on('error', reject);
   });
 }
+const translateCache = new Map();
+async function translateText(text, targetLang, sourceLang) {
+  const clean = String(text || '').trim().slice(0, 600);
+  if (!clean) return { text: '', detected: '' };
+  const tl = /^[a-z-]{2,8}$/i.test(targetLang || '') ? targetLang.toLowerCase() : 'id';
+  const sl = /^[a-z-]{2,8}$/i.test(sourceLang || '') ? sourceLang.toLowerCase() : 'auto';
+  const key = `${sl}:${tl}:${clean}`;
+  if (translateCache.has(key)) return translateCache.get(key);
+  const gUrl =
+    'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' +
+    encodeURIComponent(sl) +
+    '&tl=' +
+    encodeURIComponent(tl) +
+    '&dt=t&q=' +
+    encodeURIComponent(clean);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 5000);
+  try {
+    const r = await fetch(gUrl, {
+      signal: ac.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    if (!r.ok) return { text: clean, detected: sl };
+    const data = await r.json();
+    const out = Array.isArray(data && data[0])
+      ? data[0].map((seg) => (seg && seg[0]) || '').join('').trim()
+      : clean;
+    const resObj = { text: out || clean, detected: (data && data[2]) || sl };
+    if (translateCache.size > 1200) {
+      const firstKey = translateCache.keys().next().value;
+      translateCache.delete(firstKey);
+    }
+    translateCache.set(key, resObj);
+    return resObj;
+  } catch (e) {
+    return { text: clean, detected: sl };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const publicUser = (name, myGps) => {
   const u = db.users[name];
   ensureUserGps(u);
@@ -672,7 +722,8 @@ const publicUser = (name, myGps) => {
     pendingGpsList: u.pendingGpsList,
     myGps: myGps || null,
     gpsAutoBind: !!u.gpsAutoBind,
-    gpsRadius: u.gpsRadius || 2000
+    gpsRadius: u.gpsRadius || 2000,
+    hasFfmpeg: HAS_FFMPEG
   };
 };
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -913,18 +964,28 @@ async function handle(req, res) {
     return send(res, 201, pl);
   }
 
-  /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U, anti multi-connect MAC, dan penyambung TS otomatis */
+  /* Terjemahan otomatis subtitle (Auto CC) */
+  if (p === '/api/translate' && method === 'POST') {
+    const b = await readBody(req, 4096);
+    const out = await translateText(b.text, b.target || 'id', b.source || 'auto');
+    return send(res, 200, out);
+  }
+
+  /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U, anti multi-connect MAC, penyambung TS otomatis, & kompresi resolusi FFmpeg */
   if (p === '/api/stream' && method === 'GET') {
     const rawU = url.searchParams.get('u') || '';
     const ua = (url.searchParams.get('ua') || '').slice(0, 300);
     const ref = (url.searchParams.get('ref') || '').slice(0, 300);
     const org = (url.searchParams.get('org') || '').slice(0, 300);
+    const reqQ = +(url.searchParams.get('q') || 0);
+    const q = (reqQ === 360 || reqQ === 480 || reqQ === 720) ? reqQ : 0;
+    const forceTranscode = url.searchParams.get('transcode') === '1';
     const initialTarget = await assertPublicUrl(rawU).catch((e) => { throw fail(400, e.message); });
     const isTsLike = isDirectStreamUrl(rawU);
 
     // Cegah multi-connect pada server Stalker/MAC: putus koneksi lama pada MAC/sesi yang sama sebelum buka yang baru
     const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);
-    const lockKey = isTsLike
+    const lockKey = (isTsLike || (q && forceTranscode))
       ? (macMatch ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase() : 'ts:' + me.key)
       : '';
     if (lockKey && activeStreamLocks.has(lockKey)) {
@@ -941,10 +1002,24 @@ async function handle(req, res) {
     let clientClosed = false;
     let currentAc = new AbortController();
     let pipeStream = null;
+    let ffProc = null;
+    let ffCounted = false;
+    const killFfmpeg = () => {
+      if (ffCounted) {
+        ffCounted = false;
+        activeFfmpegCount = Math.max(0, activeFfmpegCount - 1);
+      }
+      if (ffProc) {
+        try { if (ffProc.stdin) ffProc.stdin.destroy(); } catch (e) {}
+        try { ffProc.kill('SIGKILL'); } catch (e) {}
+        ffProc = null;
+      }
+    };
     const killUpstream = () => {
       clientClosed = true;
       try { currentAc.abort(); } catch (e) {}
       if (pipeStream) { try { pipeStream.destroy(); } catch (e) {} }
+      killFfmpeg();
     };
     const lockObj = { kill: killUpstream };
     if (lockKey) activeStreamLocks.set(lockKey, lockObj);
@@ -952,6 +1027,61 @@ async function handle(req, res) {
       killUpstream();
       if (lockKey && activeStreamLocks.get(lockKey) === lockObj) activeStreamLocks.delete(lockKey);
     });
+
+    const Q_PROFILES = {
+      360: { h: 360, vb: '480k', max: '600k', buf: '1000k', ab: '64k' },
+      480: { h: 480, vb: '850k', max: '1050k', buf: '1800k', ab: '96k' },
+      720: { h: 720, vb: '1600k', max: '2000k', buf: '3200k', ab: '128k' }
+    };
+
+    const startFfmpegPipe = (height, directUrl, customUa) => {
+      const prof = Q_PROFILES[height];
+      if (!prof || !HAS_FFMPEG || activeFfmpegCount >= MAX_FFMPEG) return null;
+      const args = ['-loglevel', 'error', '-fflags', '+genpts+igndts+discardcorrupt+nobuffer'];
+      if (directUrl) {
+        if (customUa) args.push('-user_agent', customUa);
+        const hdrLines = [];
+        if (ref) {
+          hdrLines.push('Referer: ' + ref);
+          try { hdrLines.push('Origin: ' + (org || new URL(ref).origin)); } catch (e) {}
+        } else if (org) {
+          hdrLines.push('Origin: ' + org);
+        }
+        if (hdrLines.length) args.push('-headers', hdrLines.join('\r\n') + '\r\n');
+        args.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3', '-i', directUrl);
+      } else {
+        args.push('-f', 'mpegts', '-i', 'pipe:0');
+      }
+      args.push(
+        '-vf', `scale=-2:${prof.h}`,
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-b:v', prof.vb,
+        '-maxrate', prof.max,
+        '-bufsize', prof.buf,
+        '-g', '50',
+        '-c:a', 'aac',
+        '-b:a', prof.ab,
+        '-ac', '2',
+        '-f', 'mpegts',
+        'pipe:1'
+      );
+      try {
+        const proc = spawn('ffmpeg', args, { stdio: [directUrl ? 'ignore' : 'pipe', 'pipe', 'ignore'] });
+        activeFfmpegCount++;
+        ffCounted = true;
+        ffProc = proc;
+        proc.on('error', () => { killFfmpeg(); try { res.end(); } catch (e) {} });
+        proc.on('close', () => { killFfmpeg(); if (directUrl) { try { res.end(); } catch (e) {} } });
+        if (proc.stdin) proc.stdin.on('error', () => {});
+        proc.stdout.on('error', () => {});
+        proc.stdout.pipe(res);
+        return proc;
+      } catch (e) {
+        return null;
+      }
+    };
 
     const uIp = clientIp(req);
     async function connectUpstream(useUa, sendClientIp, startUrl) {
@@ -973,7 +1103,7 @@ async function handle(req, res) {
       } else if (org) {
         reqHeaders['Origin'] = org;
       }
-      if (req.headers['range'] && !isTsLike) reqHeaders['Range'] = req.headers['range'];
+      if (req.headers['range'] && !isTsLike && !q) reqHeaders['Range'] = req.headers['range'];
 
       const cookies = [];
       try {
@@ -1056,6 +1186,16 @@ async function handle(req, res) {
     };
 
     if (isM3u8) {
+      if (q && forceTranscode && HAS_FFMPEG && activeFfmpegCount < MAX_FFMPEG) {
+        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        res.writeHead(200, {
+          'Content-Type': 'video/mp2t',
+          'Cache-Control': 'no-store',
+          'X-Accel-Buffering': 'no'
+        });
+        const ff = startFfmpegPipe(q, target.toString(), chosenUa);
+        if (ff) return;
+      }
       const buf = Buffer.from(await upRes.arrayBuffer());
       const bodyText = buf.toString('utf8');
       if (bodyText.trimStart().startsWith('#EXTM3U')) {
@@ -1089,6 +1229,9 @@ async function handle(req, res) {
         'Cache-Control': 'no-store',
         'X-Accel-Buffering': 'no'
       });
+
+      const ff = q ? startFfmpegPipe(q, null, chosenUa) : null;
+      const outStream = (ff && ff.stdin) ? ff.stdin : res;
 
       // Pompa paket MPEG-TS dengan penyelarasan 188-byte (0x47) + auto-stitching saat upstream putus di tengah
       const pumpTsAligned = async (body, stepAc) => {
@@ -1128,8 +1271,8 @@ async function handle(req, res) {
               const outChunk = rem.subarray(0, alignedLen);
               rem = rem.subarray(alignedLen);
               bytesSent += outChunk.length;
-              if (!res.write(outChunk)) {
-                await new Promise((r) => res.once('drain', r));
+              if (!outStream.destroyed && !outStream.write(outChunk)) {
+                await new Promise((r) => outStream.once('drain', r));
               }
             }
           }
@@ -1179,6 +1322,7 @@ async function handle(req, res) {
         curBody = reconnected.res.body;
         curAc = reconnected.ac;
       }
+      killFfmpeg();
       return res.end();
     }
 

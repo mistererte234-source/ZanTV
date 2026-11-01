@@ -751,16 +751,25 @@ function loadLib(name) {
   return libPromises[name];
 }
 
-var E = { token: 0, retries: 0, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false };
+var E = { token: 0, retries: 0, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false, serverTranscode: false };
+var QUAL = { mode: LS.get('qual-mode', 'auto'), level: -1, serverQ: +LS.get('qual-server-q', 0) || 0, levels: [], activeHeight: 0 };
+var CC = { mode: LS.get('cc-mode', 'off'), srcLang: LS.get('cc-src', 'en-US'), hasTrack: false, sr: null, srRunning: false, hideTimer: null, lastRaw: '', reqSeq: 0, cache: {} };
 
 function destroyEngine() {
   clearTimeout(E.stall);
+  stopSpeechCc();
+  clearCcDisplay();
+  CC.hasTrack = false;
+  QUAL.levels = [];
+  QUAL.activeHeight = 0;
   if (E.hls) { try { E.hls.destroy(); } catch (e) {} E.hls = null; }
   if (E.dash) { try { E.dash.reset(); } catch (e) {} E.dash = null; }
   if (E.ts) { try { E.ts.pause(); E.ts.unload(); E.ts.detachMediaElement(); E.ts.destroy(); } catch (e) {} E.ts = null; }
   E.mode = null;
+  E.serverTranscode = false;
   el.video.removeAttribute('src');
   try { el.video.load(); } catch (e) {}
+  updateQualBadge();
 }
 
 function kindOf(url) {
@@ -818,6 +827,10 @@ function startHls(url, token) {
     if (!window.Hls || !Hls.isSupported()) { startNative(url); return; }
     var hls = new Hls({
       enableWorker: true,
+      enableWebVTT: true,
+      enableIMSC1: true,
+      enableCEA708Captions: true,
+      capLevelToPlayerSize: QUAL.mode === 'saver',
       backBufferLength: 30,
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
@@ -829,6 +842,52 @@ function startHls(url, token) {
       fragLoadingMaxRetry: 6
     });
     E.hls = hls; E.mode = 'hls';
+    hls.on(Hls.Events.MANIFEST_PARSED, function (_, data) {
+      if (token !== E.token) return;
+      var lvls = (hls.levels || []).map(function (lv, idx) {
+        return { index: idx, height: lv.height || 0, width: lv.width || 0, bitrate: lv.bitrate || 0 };
+      });
+      QUAL.levels = lvls;
+      applyHlsQuality(hls);
+      if (data && data.subtitleTracks && data.subtitleTracks.length > 0) {
+        CC.hasTrack = true;
+        if (CC.mode !== 'off') {
+          hls.subtitleDisplay = false;
+          hls.subtitleTrack = 0;
+        }
+      }
+      bindVideoTextTracks();
+      syncCcEngine();
+      updateQualBadge();
+      renderQualMenu();
+    });
+    hls.on(Hls.Events.LEVEL_SWITCHED, function (_, data) {
+      if (token !== E.token) return;
+      var lv = hls.levels && hls.levels[data.level];
+      if (lv && lv.height) QUAL.activeHeight = lv.height;
+      updateQualBadge();
+      renderQualMenu();
+    });
+    hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, function (_, data) {
+      if (token !== E.token) return;
+      if (data && data.subtitleTracks && data.subtitleTracks.length > 0) {
+        CC.hasTrack = true;
+        if (CC.mode !== 'off') {
+          hls.subtitleDisplay = false;
+          if (hls.subtitleTrack < 0) hls.subtitleTrack = 0;
+        }
+        bindVideoTextTracks();
+        syncCcEngine();
+      }
+    });
+    hls.on(Hls.Events.CUES_PARSED, function (_, data) {
+      if (token !== E.token || CC.mode === 'off') return;
+      CC.hasTrack = true;
+      stopSpeechCc();
+      if (data && data.cues && data.cues.length) {
+        bindVideoTextTracks();
+      }
+    });
     var recovered = 0;
     hls.on(Hls.Events.ERROR, function (_, d) {
       if (!d.fatal || token !== E.token) return;
@@ -885,6 +944,20 @@ function startDash(url, token) {
       try { protectedStream = /contentprotection/i.test(JSON.stringify(ev && ev.data ? ev.data : {})); } catch (x) {}
       if (protectedStream && token === E.token) fail({ kind: 'drm' }, token);
     });
+    p.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, function () {
+      if (token !== E.token) return;
+      try {
+        var list = p.getBitrateInfoListFor('video') || [];
+        QUAL.levels = list.map(function (b, idx) {
+          return { index: idx, height: b.height || 0, width: b.width || 0, bitrate: b.bitrate || 0 };
+        });
+        applyDashQuality(p);
+      } catch (e) {}
+      bindVideoTextTracks();
+      syncCcEngine();
+      updateQualBadge();
+      renderQualMenu();
+    });
     p.initialize(el.video, url, true);
   });
 }
@@ -931,11 +1004,12 @@ el.video.addEventListener('error', function () {
   fail({ kind: code === 4 ? 'media' : 'network', code: 0 }, E.token);
 });
 
-function streamProxyUrl(rawUrl, ch) {
+function streamProxyUrl(rawUrl, ch, serverQ) {
   var q = location.origin + '/api/stream?u=' + encodeURIComponent(rawUrl);
   if (ch && ch.ua) q += '&ua=' + encodeURIComponent(ch.ua);
   if (ch && ch.ref) q += '&ref=' + encodeURIComponent(ch.ref);
   if (ch && ch.origin) q += '&org=' + encodeURIComponent(ch.origin);
+  if (serverQ) q += '&q=' + encodeURIComponent(serverQ) + '&transcode=1';
   return q;
 }
 
@@ -957,9 +1031,23 @@ function play(ch, opts) {
   var kind = kindOf(ch.url);
   var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
   var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(ch.url);
-  var useProxy = !!(opts.viaProxy || ch.needsHeaders || isHttpOnHttps || isTsOrStalker) && kind !== 'unsupported' && kind !== 'dash';
+  var canFfmpeg = !ME || ME.hasFfmpeg !== false;
+  var canMpegts = !!(window.MediaSource || window.ManagedMediaSource);
+  var wantServerQ = 0;
+  if (canFfmpeg && canMpegts && !opts.noTranscode && kind !== 'unsupported' && kind !== 'dash') {
+    if (QUAL.mode === 'server' && QUAL.serverQ) wantServerQ = QUAL.serverQ;
+    else if (QUAL.mode === 'saver' && isTsOrStalker) wantServerQ = 480;
+  }
+  var useProxy = !!(wantServerQ || opts.viaProxy || ch.needsHeaders || isHttpOnHttps || isTsOrStalker) && kind !== 'unsupported' && kind !== 'dash';
   E.viaProxy = useProxy;
-  var url = useProxy ? streamProxyUrl(ch.url, ch) : upgradeUrl(ch.url);
+  E.serverTranscode = !!wantServerQ;
+  var url = useProxy ? streamProxyUrl(ch.url, ch, wantServerQ) : upgradeUrl(ch.url);
+  if (wantServerQ) {
+    kind = 'mpegts';
+    QUAL.activeHeight = wantServerQ;
+  }
+  updateQualBadge();
+  renderQualMenu();
   var start;
   if (kind === 'unsupported') start = Promise.reject({ kind: 'unsupported' });
   else if (kind === 'hls') start = startHls(url, token);
@@ -969,6 +1057,8 @@ function play(ch, opts) {
 
   start.then(function () {
     if (token !== E.token) return;
+    bindVideoTextTracks();
+    syncCcEngine();
     var p = el.video.play();
     if (p && p.catch) {
       p.catch(function (e) {
@@ -991,6 +1081,11 @@ function lockReason(info) {
 
 function fail(info, token) {
   if (token !== E.token) return;
+  if (E.serverTranscode && S.playing) {
+    el.nowMeta.textContent = 'Kompresi server tidak tersedia untuk channel ini, beralih ke resolusi asli…';
+    play(S.playing, { retry: true, viaProxy: true, noTranscode: true });
+    return;
+  }
   if (!E.viaProxy && S.playing && info.kind !== 'drm' && info.kind !== 'unsupported' && info.kind !== 'lib' && kindOf(S.playing.url) !== 'dash') {
     el.nowMeta.textContent = 'Mencoba memutar lewat jalur relay server…';
     play(S.playing, { retry: true, viaProxy: true });
@@ -1040,6 +1135,23 @@ function hideMsg() { el.msg.hidden = true; el.stage.classList.remove('has-msg');
 el.video.addEventListener('playing', function () {
   clearTimeout(E.stall); setBusy(false); E.retries = 0;
   el.liveTag.hidden = false; syncPlay(); updateNow();
+  if (el.video.videoHeight) QUAL.activeHeight = el.video.videoHeight;
+  updateQualBadge();
+  renderQualMenu();
+  bindVideoTextTracks();
+  syncCcEngine();
+});
+el.video.addEventListener('loadedmetadata', function () {
+  if (el.video.videoHeight) QUAL.activeHeight = el.video.videoHeight;
+  updateQualBadge();
+  renderQualMenu();
+  bindVideoTextTracks();
+});
+el.video.addEventListener('resize', function () {
+  if (el.video.videoHeight) {
+    QUAL.activeHeight = el.video.videoHeight;
+    updateQualBadge();
+  }
 });
 el.video.addEventListener('waiting', function () {
   if (healBufferGap()) { setBusy(false); return; }
@@ -1068,8 +1180,419 @@ el.video.addEventListener('waiting', function () { W.last = 0; });
 el.video.addEventListener('volumechange', syncMute);
 
 /* ------------------------------------------------------------------ */
-/* Panel "sedang diputar", OSD, kontrol                                 */
+/* Pilihan Resolusi (Quality Selector) & Mode Hemat Data               */
 /* ------------------------------------------------------------------ */
+function pickSaverLevelIndex(levels) {
+  if (!levels || !levels.length) return -1;
+  var bestIdx = -1, bestH = -1, minIdx = 0, minH = Infinity;
+  for (var i = 0; i < levels.length; i++) {
+    var h = levels[i].height || 0;
+    var br = levels[i].bitrate || 0;
+    var score = h || Math.round(br / 2000);
+    if (score > 0 && score < minH) { minH = score; minIdx = levels[i].index; }
+    if ((h > 0 && h <= 480) || (!h && br > 0 && br <= 1100000)) {
+      if (score >= bestH) { bestH = score; bestIdx = levels[i].index; }
+    }
+  }
+  return bestIdx >= 0 ? bestIdx : minIdx;
+}
+
+function applyHlsQuality(hls) {
+  if (!hls) return;
+  if (QUAL.mode === 'auto') {
+    hls.autoLevelCapping = -1;
+    hls.currentLevel = -1;
+  } else if (QUAL.mode === 'saver') {
+    var capIdx = pickSaverLevelIndex(QUAL.levels);
+    if (capIdx >= 0) {
+      hls.autoLevelCapping = capIdx;
+      hls.currentLevel = capIdx;
+    }
+  } else if (QUAL.mode === 'native' && QUAL.level >= 0 && QUAL.level < (hls.levels || []).length) {
+    hls.autoLevelCapping = -1;
+    hls.currentLevel = QUAL.level;
+  }
+}
+
+function applyDashQuality(p) {
+  if (!p) return;
+  try {
+    if (QUAL.mode === 'auto') {
+      p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: -1 } } } });
+    } else if (QUAL.mode === 'saver') {
+      p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: 1000 } } } });
+      var idx = pickSaverLevelIndex(QUAL.levels);
+      if (idx >= 0) p.setQualityFor('video', idx);
+    } else if (QUAL.mode === 'native' && QUAL.level >= 0) {
+      p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
+      p.setQualityFor('video', QUAL.level);
+    }
+  } catch (e) {}
+}
+
+function fmtBitrate(bps) {
+  if (!bps || bps <= 0) return '';
+  if (bps >= 1000000) return (bps / 1000000).toFixed(1) + ' Mbps';
+  return Math.round(bps / 1000) + ' kbps';
+}
+
+function updateQualBadge() {
+  var badge = $('#qualBadge');
+  var btn = $('#qualBtn');
+  var pill = $('#qualStatusPill');
+  if (!badge || !btn) return;
+  var h = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
+  var text = 'AUTO';
+  var pillText = 'Otomatis';
+  if (E.serverTranscode && QUAL.serverQ) {
+    text = QUAL.serverQ + 'p⚡';
+    pillText = 'Kompresi Server ' + QUAL.serverQ + 'p';
+  } else if (QUAL.mode === 'server' && QUAL.serverQ) {
+    text = QUAL.serverQ + 'p⚡';
+    pillText = 'Kompresi Server ' + QUAL.serverQ + 'p';
+  } else if (QUAL.mode === 'saver') {
+    text = h ? 'HEMAT·' + h + 'p' : 'HEMAT';
+    pillText = h ? 'Hemat Data (' + h + 'p)' : 'Hemat Data (≤480p)';
+  } else if (QUAL.mode === 'native' && QUAL.level >= 0) {
+    var lv = QUAL.levels[QUAL.level];
+    var lh = (lv && lv.height) || h;
+    text = lh ? lh + 'p' : 'MANUAL';
+    pillText = lh ? 'Dikunci ' + lh + 'p' : 'Manual';
+  } else {
+    text = h ? 'AUTO·' + h + 'p' : 'AUTO';
+    pillText = h ? 'Otomatis (' + h + 'p aktif)' : 'Otomatis';
+  }
+  badge.textContent = text;
+  btn.setAttribute('aria-pressed', String(QUAL.mode !== 'auto'));
+  if (pill) pill.textContent = pillText;
+}
+
+function renderQualMenu() {
+  var box = $('#qualList');
+  if (!box) return;
+  var h = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
+  var items = [];
+  items.push({
+    qmode: 'auto', level: -1, sq: 0,
+    active: QUAL.mode === 'auto',
+    label: '⚡ Otomatis (Sesuai Kecepatan Internet)',
+    tag: h && QUAL.mode === 'auto' ? h + 'p' : 'ABR'
+  });
+  items.push({
+    qmode: 'saver', level: -1, sq: 0,
+    active: QUAL.mode === 'saver',
+    label: '🍃 Mode Hemat Data (Kunci SD ≤ 480p)',
+    tag: 'Hemat Kuota'
+  });
+
+  if (QUAL.levels && QUAL.levels.length > 1) {
+    var sorted = QUAL.levels.slice().sort(function (a, b) {
+      return (b.height - a.height) || (b.bitrate - a.bitrate);
+    });
+    var seen = {};
+    sorted.forEach(function (lv) {
+      var key = (lv.height || 0) + ':' + Math.round((lv.bitrate || 0) / 100000);
+      if (seen[key]) return;
+      seen[key] = true;
+      var tag = fmtBitrate(lv.bitrate);
+      var name = lv.height ? (lv.height + 'p' + (lv.height >= 1080 ? ' FHD' : lv.height >= 720 ? ' HD' : ' SD')) : ('Level ' + (lv.index + 1));
+      items.push({
+        qmode: 'native', level: lv.index, sq: 0,
+        active: QUAL.mode === 'native' && QUAL.level === lv.index,
+        label: '🎬 ' + name + ' (Bawaan Stream)',
+        tag: tag || 'Asli'
+      });
+    });
+  }
+
+  var canFfmpeg = !ME || ME.hasFfmpeg !== false;
+  var canMpegts = !!(window.MediaSource || window.ManagedMediaSource);
+  if (canFfmpeg && canMpegts) {
+    [
+      { q: 720, name: '🚀 720p HD (Kompresi Server)', tag: '~1.6 Mbps' },
+      { q: 480, name: '🚀 480p SD (Kompresi Server)', tag: '~850 kbps' },
+      { q: 360, name: '🚀 360p Lancar (Kompresi Server)', tag: '~480 kbps' }
+    ].forEach(function ( preset) {
+      items.push({
+        qmode: 'server', level: -1, sq: preset.q,
+        active: QUAL.mode === 'server' && QUAL.serverQ === preset.q,
+        label: preset.name,
+        tag: preset.tag
+      });
+    });
+  }
+
+  box.innerHTML = items.map(function (it) {
+    return '<button type="button" class="player-pop-opt" data-qmode="' + esc(it.qmode) + '" data-level="' + it.level + '" data-sq="' + it.sq + '" aria-checked="' + String(!!it.active) + '">' +
+      '<span>' + esc(it.label) + '</span>' +
+      (it.tag ? '<small>' + esc(it.tag) + '</small>' : '') +
+    '</button>';
+  }).join('');
+}
+
+function selectQualityOption(qmode, level, sq) {
+  var prevServer = E.serverTranscode ? QUAL.serverQ : 0;
+  QUAL.mode = qmode;
+  QUAL.level = level;
+  QUAL.serverQ = sq || 0;
+  LS.set('qual-mode', qmode);
+  LS.set('qual-server-q', QUAL.serverQ);
+
+  updateQualBadge();
+  renderQualMenu();
+
+  if (!S.playing) return;
+  var kind = kindOf(S.playing.url);
+  var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(S.playing.url);
+  var nextServer = (qmode === 'server' && sq) ? sq : (qmode === 'saver' && isTsOrStalker ? 480 : 0);
+
+  if (prevServer !== nextServer) {
+    toast(nextServer ? 'Mengubah resolusi ke ' + nextServer + 'p via Kompresi Server…' : 'Kembali ke resolusi asli stream…');
+    play(S.playing, { viaProxy: true });
+    return;
+  }
+  if (E.hls) {
+    applyHlsQuality(E.hls);
+    toast(qmode === 'saver' ? 'Mode Hemat Data aktif (≤ 480p)' : qmode === 'auto' ? 'Resolusi Otomatis aktif' : 'Resolusi dikunci');
+  } else if (E.dash) {
+    applyDashQuality(E.dash);
+    toast(qmode === 'saver' ? 'Mode Hemat Data aktif (≤ 480p)' : qmode === 'auto' ? 'Resolusi Otomatis aktif' : 'Resolusi dikunci');
+  } else if (qmode === 'saver' && !nextServer) {
+    toast('Mode Hemat Data disimpan');
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Auto CC (Subtitles + Auto-Translate Bahasa Indonesia / Inggris)     */
+/* ------------------------------------------------------------------ */
+function stripTags(s) {
+  return String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function clearCcDisplay() {
+  clearTimeout(CC.hideTimer);
+  var box = $('#ccBox'), txt = $('#ccText'), orig = $('#ccOrig');
+  if (box) box.hidden = true;
+  if (txt) txt.textContent = '';
+  if (orig) { orig.hidden = true; orig.textContent = ''; }
+}
+
+function updateCcUi() {
+  var btn = $('#ccBtn');
+  var pill = $('#ccStatusPill');
+  var list = $('#ccTargetList');
+  var srcSel = $('#ccSrcLang');
+  if (btn) btn.setAttribute('aria-pressed', String(CC.mode !== 'off'));
+  if (srcSel && srcSel.value !== CC.srcLang) srcSel.value = CC.srcLang;
+  if (list) {
+    Array.prototype.forEach.call(list.querySelectorAll('[data-cc-target]'), function (b) {
+      b.setAttribute('aria-checked', String(b.getAttribute('data-cc-target') === CC.mode));
+    });
+  }
+  if (pill) {
+    if (CC.mode === 'off') pill.textContent = 'Mati';
+    else if (CC.hasTrack) pill.textContent = 'Aktif · Subtitle Stream';
+    else if (CC.srRunning) pill.textContent = 'Aktif · Live Audio AI';
+    else if (window.SpeechRecognition || window.webkitSpeechRecognition) pill.textContent = 'Aktif · Menunggu Suara…';
+    else pill.textContent = 'Aktif · Menunggu Track CC';
+  }
+}
+
+function showCcCue(rawText, isInterim, sourceLabel) {
+  if (CC.mode === 'off') { clearCcDisplay(); return; }
+  var clean = stripTags(rawText);
+  if (!clean) return;
+  var box = $('#ccBox'), txt = $('#ccText'), orig = $('#ccOrig');
+  if (!box || !txt || !orig) return;
+
+  clearTimeout(CC.hideTimer);
+  CC.hideTimer = setTimeout(clearCcDisplay, isInterim ? 5000 : 7500);
+
+  if (CC.mode === 'orig') {
+    orig.hidden = true;
+    txt.textContent = clean;
+    box.hidden = false;
+    return;
+  }
+
+  var target = CC.mode; // 'id' or 'en'
+  var cacheKey = target + '|' + clean.toLowerCase();
+  if (CC.cache[cacheKey]) {
+    txt.textContent = CC.cache[cacheKey];
+    if (CC.cache[cacheKey].toLowerCase() !== clean.toLowerCase()) {
+      orig.textContent = clean;
+      orig.hidden = false;
+    } else {
+      orig.hidden = true;
+    }
+    box.hidden = false;
+    return;
+  }
+
+  // Tampilkan teks asli terlebih dahulu sambil menerjemahkan
+  txt.textContent = clean;
+  orig.hidden = true;
+  box.hidden = false;
+
+  // Jangan spam API saat interim masih sangat pendek
+  if (isInterim && clean.length < 14) return;
+  var seq = ++CC.reqSeq;
+  var srcCode = CC.hasTrack ? 'auto' : String(CC.srcLang || 'auto').split('-')[0];
+  api('POST', '/api/translate', { text: clean, target: target, source: srcCode }).then(function (r) {
+    if (CC.mode === 'off' || !r || !r.translated) return;
+    CC.cache[cacheKey] = r.translated;
+    if (seq !== CC.reqSeq && isInterim) return;
+    txt.textContent = r.translated;
+    if (r.translated.toLowerCase() !== clean.toLowerCase()) {
+      orig.textContent = clean;
+      orig.hidden = false;
+    } else {
+      orig.hidden = true;
+    }
+    box.hidden = false;
+  }).catch(function () {});
+}
+
+function bindVideoTextTracks() {
+  var tracks = el.video && el.video.textTracks;
+  if (!tracks) return;
+  for (var i = 0; i < tracks.length; i++) {
+    (function (tr) {
+      if (tr.__zanBound) {
+        tr.mode = CC.mode === 'off' ? 'disabled' : 'hidden';
+        return;
+      }
+      tr.__zanBound = true;
+      tr.mode = CC.mode === 'off' ? 'disabled' : 'hidden';
+      tr.addEventListener('cuechange', function () {
+        if (CC.mode === 'off') return;
+        var active = tr.activeCues;
+        if (!active || !active.length) return;
+        CC.hasTrack = true;
+        stopSpeechCc();
+        updateCcUi();
+        var lines = [];
+        for (var j = 0; j < active.length; j++) {
+          if (active[j] && active[j].text) lines.push(active[j].text);
+        }
+        var joined = lines.join(' ');
+        if (joined) showCcCue(joined, false, 'Stream');
+      });
+    })(tracks[i]);
+  }
+}
+
+if (el.video && el.video.textTracks && el.video.textTracks.addEventListener) {
+  el.video.textTracks.addEventListener('addtrack', function () {
+    CC.hasTrack = true;
+    bindVideoTextTracks();
+    syncCcEngine();
+  });
+}
+
+function startSpeechCc() {
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR || CC.mode === 'off' || CC.hasTrack || !S.playing) {
+    updateCcUi();
+    return;
+  }
+  if (CC.srRunning && CC.sr) {
+    updateCcUi();
+    return;
+  }
+  try {
+    var rec = new SR();
+    rec.lang = CC.srcLang || 'en-US';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    rec.onstart = function () {
+      CC.srRunning = true;
+      updateCcUi();
+    };
+    rec.onresult = function (ev) {
+      if (CC.mode === 'off') return;
+      var interim = '', finalTxt = '';
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var t = ev.results[i][0] ? ev.results[i][0].transcript : '';
+        if (ev.results[i].isFinal) finalTxt += t + ' ';
+        else interim += t;
+      }
+      var picked = finalTxt.trim() || interim.trim();
+      if (picked) showCcCue(picked, !finalTxt.trim(), 'Audio AI');
+    };
+    rec.onerror = function (ev) {
+      if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) {
+        CC.srRunning = false;
+        CC.sr = null;
+        updateCcUi();
+      }
+    };
+    rec.onend = function () {
+      CC.srRunning = false;
+      updateCcUi();
+      if (CC.mode !== 'off' && !CC.hasTrack && S.playing && CC.sr === rec) {
+        setTimeout(function () {
+          if (CC.mode !== 'off' && !CC.hasTrack && S.playing && CC.sr === rec) {
+            try { rec.start(); } catch (e) {}
+          }
+        }, 400);
+      }
+    };
+    CC.sr = rec;
+    rec.start();
+  } catch (e) {
+    CC.srRunning = false;
+    updateCcUi();
+  }
+}
+
+function stopSpeechCc() {
+  var rec = CC.sr;
+  CC.sr = null;
+  CC.srRunning = false;
+  if (rec) {
+    try { rec.onend = null; rec.stop(); } catch (e) {}
+  }
+  updateCcUi();
+}
+
+function syncCcEngine() {
+  bindVideoTextTracks();
+  if (E.hls) {
+    try {
+      if (CC.mode !== 'off' && E.hls.subtitleTracks && E.hls.subtitleTracks.length > 0) {
+        CC.hasTrack = true;
+        E.hls.subtitleDisplay = false;
+        if (E.hls.subtitleTrack < 0) E.hls.subtitleTrack = 0;
+      } else if (CC.mode === 'off') {
+        E.hls.subtitleTrack = -1;
+      }
+    } catch (e) {}
+  }
+  if (CC.mode === 'off') {
+    stopSpeechCc();
+    clearCcDisplay();
+  } else if (CC.hasTrack) {
+    stopSpeechCc();
+  } else {
+    startSpeechCc();
+  }
+  updateCcUi();
+}
+
+function setCcMode(mode) {
+  CC.mode = mode;
+  LS.set('cc-mode', mode);
+  syncCcEngine();
+  if (mode === 'off') {
+    toast('Auto CC (Subtitle) dimatikan');
+  } else {
+    var label = mode === 'id' ? 'Terjemahan Indonesia' : mode === 'en' ? 'Terjemahan Inggris' : 'Bahasa Asli';
+    toast('Auto CC aktif: ' + label);
+    showCcCue(CC.hasTrack ? 'Subtitle stream aktif (' + label + ')' : 'Auto CC siap menerjemahkan dialog (' + label + ')…', true, 'System');
+  }
+}
 function updateNow() {
   var c = S.playing || S.cued;
   var nowEpg = $('#nowEpg');
@@ -1295,10 +1818,21 @@ window.addEventListener('keydown', function (e) {
 
 /* sembunyikan kontrol saat diam */
 var idleUiTimer;
+function isPlayerPopOpen() {
+  var cm = $('#ccMenu'), qm = $('#qualMenu');
+  return !!((cm && !cm.hidden) || (qm && !qm.hidden));
+}
+function closePlayerPops() {
+  var cm = $('#ccMenu'), qm = $('#qualMenu');
+  if (cm) cm.hidden = true;
+  if (qm) qm.hidden = true;
+}
 function wakeUi() {
   el.stage.classList.remove('idle-ui');
   clearTimeout(idleUiTimer);
-  idleUiTimer = setTimeout(function () { if (S.playing && !el.video.paused) el.stage.classList.add('idle-ui'); }, 3000);
+  idleUiTimer = setTimeout(function () {
+    if (S.playing && !el.video.paused && !isPlayerPopOpen()) el.stage.classList.add('idle-ui');
+  }, 3000);
 }
 ['mousemove', 'touchstart', 'keydown'].forEach(function (ev) { el.stage.addEventListener(ev, wakeUi, { passive: true }); });
 
@@ -1345,8 +1879,9 @@ function typeDigit(d) {
 document.addEventListener('keydown', function (e) {
   var t = e.target;
   var k = e.key;
-  var inInput = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
+  var inInput = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
   if (el.dialog.open || $('#acctDialog').open || $('#actDialog').open || !$('#gate').hidden) return;
+  if (k === 'Escape' && isPlayerPopOpen()) { e.preventDefault(); closePlayerPops(); return; }
 
   if (inInput) {
     if (t === el.search && (k === 'ArrowDown' || k === 'Enter')) { e.preventDefault(); focusList(); }
@@ -1361,6 +1896,7 @@ document.addEventListener('keydown', function (e) {
   if (/^[0-9]$/.test(k)) { e.preventDefault(); typeDigit(k); return; }
   if (k === '/') { e.preventDefault(); unlockSearch(); el.search.focus(); return; }
   if (k === 'f' || k === 'F') { e.preventDefault(); toggleFullscreen(); return; }
+  if (k === 'c' || k === 'C') { e.preventDefault(); setCcMode(CC.mode === 'off' ? 'id' : 'off'); return; }
   if (k === 's' || k === 'S' || k === 'ContextMenu') { e.preventDefault(); toggleFav(); return; }
   if (k === 'm' || k === 'M') { el.video.muted = !el.video.muted; return; }
   if (k === 'MediaPlayPause') { togglePlay(); return; }
@@ -1480,6 +2016,69 @@ $('#pipBtn').addEventListener('click', function () {
   else toast('Browser ini belum mendukung picture-in-picture');
 });
 if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
+
+(function initCcAndQualityUi() {
+  var ccBtn = $('#ccBtn'), ccMenu = $('#ccMenu'), ccList = $('#ccTargetList'), ccSrc = $('#ccSrcLang');
+  var qualBtn = $('#qualBtn'), qualMenu = $('#qualMenu'), qualList = $('#qualList');
+  updateCcUi();
+  updateQualBadge();
+  renderQualMenu();
+
+  if (ccBtn && ccMenu) {
+    ccBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nextOpen = ccMenu.hidden;
+      closePlayerPops();
+      ccMenu.hidden = !nextOpen;
+      if (nextOpen) { updateCcUi(); wakeUi(); }
+    });
+  }
+  if (ccList) {
+    ccList.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-cc-target]');
+      if (!b) return;
+      setCcMode(b.getAttribute('data-cc-target') || 'off');
+      if (ccMenu) ccMenu.hidden = true;
+    });
+  }
+  if (ccSrc) {
+    ccSrc.addEventListener('change', function () {
+      CC.srcLang = ccSrc.value || 'en-US';
+      LS.set('cc-src', CC.srcLang);
+      if (CC.srRunning) {
+        stopSpeechCc();
+        startSpeechCc();
+      }
+      toast('Bahasa sumber dialog disetel ke ' + (ccSrc.options[ccSrc.selectedIndex] ? ccSrc.options[ccSrc.selectedIndex].text : CC.srcLang));
+    });
+  }
+  if (qualBtn && qualMenu) {
+    qualBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nextOpen = qualMenu.hidden;
+      closePlayerPops();
+      qualMenu.hidden = !nextOpen;
+      if (nextOpen) { renderQualMenu(); updateQualBadge(); wakeUi(); }
+    });
+  }
+  if (qualList) {
+    qualList.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-qmode]');
+      if (!b) return;
+      var qmode = b.getAttribute('data-qmode') || 'auto';
+      var level = parseInt(b.getAttribute('data-level') || '-1', 10);
+      var sq = parseInt(b.getAttribute('data-sq') || '0', 10);
+      selectQualityOption(qmode, level, sq);
+      if (qualMenu) qualMenu.hidden = true;
+    });
+  }
+  document.addEventListener('click', function (e) {
+    if (!isPlayerPopOpen()) return;
+    if (e.target.closest && e.target.closest('#ccMenu, #qualMenu, #ccBtn, #qualBtn')) return;
+    closePlayerPops();
+  });
+})();
+
 $('#retryBtn').addEventListener('click', function () { if (S.playing) play(S.playing); });
 $('#nextBtn').addEventListener('click', function () { zap(1); });
 $('#copyBtn').addEventListener('click', function () {
@@ -1490,14 +2089,14 @@ $('#copyBtn').addEventListener('click', function () {
       .catch(function () { prompt('Salin alamat ini:', url); });
   } else prompt('Salin alamat ini:', url);
 });
-el.stage.addEventListener('dblclick', function (e) { if (!e.target.closest('.controls, .msg')) toggleFullscreen(); });
+el.stage.addEventListener('dblclick', function (e) { if (!e.target.closest('.controls, .msg, .player-pop')) toggleFullscreen(); });
 el.idle.addEventListener('click', function () { if (S.cued) play(S.cued); });
 
 /* geser naik/turun di layar sentuh = ganti channel */
 (function () {
   var y0 = null, x0 = null, t0 = 0;
   el.stage.addEventListener('touchstart', function (e) {
-    if (e.touches.length !== 1 || e.target.closest('.controls, .msg')) { y0 = null; return; }
+    if (e.touches.length !== 1 || e.target.closest('.controls, .msg, .player-pop')) { y0 = null; return; }
     y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; t0 = Date.now();
   }, { passive: true });
   el.stage.addEventListener('touchend', function (e) {
