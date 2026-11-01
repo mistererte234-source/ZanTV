@@ -66,9 +66,20 @@ const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const validName = (n) => typeof n === 'string' && /^[a-z0-9._-]{3,32}$/.test(n);
 const validPass = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 200;
 
-function createSession(name) {
+function gpsDistanceMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function createSession(name, gpsOk) {
   const token = crypto.randomBytes(32).toString('base64url');
-  db.sessions[sha(token)] = { user: name, exp: Date.now() + SESSION_MS };
+  db.sessions[sha(token)] = { user: name, exp: Date.now() + SESSION_MS, gpsOk: !!gpsOk };
   for (const [k, s] of Object.entries(db.sessions)) if (s.exp < Date.now()) delete db.sessions[k];
   save();
   return token;
@@ -80,8 +91,12 @@ function sessionUser(req) {
   const m = /(?:^|;\s*)zantv_sid=([A-Za-z0-9_-]+)/.exec(req.headers.cookie || '');
   if (!m) return null;
   const s = db.sessions[sha(m[1])];
-  if (!s || s.exp < Date.now() || !db.users[s.user]) return null;
-  return { name: s.user, role: db.users[s.user].role, key: sha(m[1]) };
+  const u = s && db.users[s.user];
+  if (!s || s.exp < Date.now() || !u) return null;
+  if (u.role !== 'admin') {
+    if (!s.gpsOk || !u.gps || typeof u.gps.lat !== 'number' || typeof u.gps.lng !== 'number') return null;
+  }
+  return { name: s.user, role: u.role, key: sha(m[1]) };
 }
 function cookie(token, maxAgeSec) {
   return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}${COOKIE_SECURE ? '; Secure' : ''}`;
@@ -559,7 +574,18 @@ function readBody(req, limit) {
     req.on('error', reject);
   });
 }
-const publicUser = (name) => ({ name, role: db.users[name].role, created: db.users[name].created });
+const publicUser = (name) => {
+  const u = db.users[name];
+  return {
+    name,
+    role: u.role,
+    created: u.created,
+    gps: u.gps || null,
+    pendingGps: u.pendingGps || null,
+    gpsAutoBind: !!u.gpsAutoBind,
+    gpsRadius: u.gpsRadius || (u.gps && u.gps.radius) || 2000
+  };
+};
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const activeStreamLocks = new Map();
 
@@ -582,8 +608,56 @@ async function handle(req, res) {
     const ok = user ? checkPassword(user, String(b.password || '')) : (checkPassword(DUMMY, 'x'), false);
     if (!ok) { loginFailed(ip); logEvent(req, null, 'login_failed', { tried: clip(name, 40) }); throw fail(401, 'Nama pengguna atau kata sandi salah'); }
     attempts.delete(ip);
+
+    const rawLat = b.lat, rawLng = b.lng, acc = Math.round(+b.accuracy || 0);
+    const hasCoords =
+      rawLat !== null && rawLat !== undefined && rawLat !== '' &&
+      rawLng !== null && rawLng !== undefined && rawLng !== '' &&
+      Number.isFinite(+rawLat) && Number.isFinite(+rawLng) &&
+      Math.abs(+rawLat) <= 90 && Math.abs(+rawLng) <= 180;
+
+    if (user.role !== 'admin') {
+      if (!hasCoords) {
+        logEvent(req, name, 'login_gps_missing', { reason: clip(b.gpsError || 'no_gps', 60) });
+        throw fail(403, 'Akses ditolak: Akun selain admin wajib mengaktifkan & mengizinkan GPS pada browser/perangkat untuk masuk.');
+      }
+      const lat = +(+rawLat).toFixed(5), lng = +(+rawLng).toFixed(5);
+      if (!user.gps || typeof user.gps.lat !== 'number' || typeof user.gps.lng !== 'number') {
+        if (user.gpsAutoBind) {
+          const radius = Math.max(100, +(user.gpsRadius || 2000));
+          user.gps = { lat, lng, radius, updatedAt: Date.now(), by: 'auto-bind', lastLat: lat, lastLng: lng, lastAcc: acc, lastAt: Date.now() };
+          user.gpsAutoBind = false;
+          user.pendingGps = null;
+          save();
+          logEvent(req, name, 'location', { lat, lng, accuracy: acc });
+        } else {
+          user.pendingGps = { lat, lng, accuracy: acc, at: Date.now(), ip: clientIp(req), device: parseUA(req.headers['user-agent']) };
+          save();
+          logEvent(req, name, 'login_gps_unregistered', { lat, lng, accuracy: acc });
+          throw fail(403, `Akses ditolak: Lokasi GPS kamu (${lat}, ${lng}) belum terdaftar di database user. Koordinatmu sudah dikirim ke Admin untuk disetujui.`);
+        }
+      } else {
+        const dist = Math.round(gpsDistanceMeters(user.gps.lat, user.gps.lng, lat, lng));
+        const maxRadius = Math.max(100, +(user.gps.radius || user.gpsRadius || 2000));
+        if (dist > maxRadius) {
+          user.pendingGps = { lat, lng, accuracy: acc, at: Date.now(), ip: clientIp(req), device: parseUA(req.headers['user-agent']), dist };
+          save();
+          logEvent(req, name, 'login_gps_mismatch', { lat, lng, accuracy: acc, dist, maxRadius });
+          throw fail(403, `Akses ditolak: Lokasi GPS tidak sesuai dengan database (jarak ${dist} m dari titik terdaftar, batas izin ${maxRadius} m).`);
+        }
+        user.gps.lastLat = lat;
+        user.gps.lastLng = lng;
+        user.gps.lastAcc = acc;
+        user.gps.lastAt = Date.now();
+        save();
+        logEvent(req, name, 'location', { lat, lng, accuracy: acc });
+      }
+    } else if (hasCoords) {
+      logEvent(req, name, 'location', { lat: +(+rawLat).toFixed(5), lng: +(+rawLng).toFixed(5), accuracy: acc });
+    }
+
     logEvent(req, name, 'login');
-    const token = createSession(name);
+    const token = createSession(name, true);
     return send(res, 200, publicUser(name), { 'Set-Cookie': cookie(token, SESSION_MS / 1000) });
   }
 
@@ -599,13 +673,50 @@ async function handle(req, res) {
     return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0) });
   }
   if (p === '/api/me' && method === 'GET') return send(res, 200, publicUser(me.name));
+  if (p === '/api/me/gps' && method === 'POST') {
+    const b = await readBody(req, 4096);
+    const rawLat = b.lat, rawLng = b.lng, acc = Math.round(+b.accuracy || 0);
+    const hasCoords =
+      rawLat !== null && rawLat !== undefined && rawLat !== '' &&
+      rawLng !== null && rawLng !== undefined && rawLng !== '' &&
+      Number.isFinite(+rawLat) && Number.isFinite(+rawLng) &&
+      Math.abs(+rawLat) <= 90 && Math.abs(+rawLng) <= 180;
+    const u = db.users[me.name];
+    if (!admin) {
+      if (!u || !u.gps || typeof u.gps.lat !== 'number' || typeof u.gps.lng !== 'number') {
+        dropSessionsOf(me.name); save();
+        throw fail(401, 'Akses lokasi GPS akun ini telah dicabut oleh Admin.');
+      }
+      if (!hasCoords) {
+        logEvent(req, me.name, 'login_gps_missing', { reason: clip(b.gpsError || 'periodic_no_gps', 60) });
+        dropSessionsOf(me.name); save();
+        throw fail(401, 'Sesi dihentikan karena izin GPS dimatikan pada perangkat/browser.');
+      }
+      const lat = +(+rawLat).toFixed(5), lng = +(+rawLng).toFixed(5);
+      const dist = Math.round(gpsDistanceMeters(u.gps.lat, u.gps.lng, lat, lng));
+      const maxRadius = Math.max(100, +(u.gps.radius || u.gpsRadius || 2000));
+      if (dist > maxRadius) {
+        u.pendingGps = { lat, lng, accuracy: acc, at: Date.now(), ip: clientIp(req), device: parseUA(req.headers['user-agent']), dist };
+        dropSessionsOf(me.name); save();
+        logEvent(req, me.name, 'login_gps_mismatch', { lat, lng, accuracy: acc, dist, maxRadius });
+        throw fail(401, `Sesi dihentikan: Lokasi GPS berada di luar area terdaftar (${dist} m > ${maxRadius} m).`);
+      }
+      u.gps.lastLat = lat; u.gps.lastLng = lng; u.gps.lastAcc = acc; u.gps.lastAt = Date.now();
+      save();
+      return send(res, 200, { ok: true, dist, maxRadius });
+    }
+    if (hasCoords) {
+      logEvent(req, me.name, 'location', { lat: +(+rawLat).toFixed(5), lng: +(+rawLng).toFixed(5), accuracy: acc });
+    }
+    return send(res, 200, { ok: true });
+  }
   if (p === '/api/me/password' && method === 'POST') {
     const b = await readBody(req, 4096);
     if (!checkPassword(db.users[me.name], String(b.current || ''))) throw fail(400, 'Kata sandi lama salah');
     if (!validPass(b.password)) throw fail(400, 'Kata sandi baru minimal 8 karakter');
     Object.assign(db.users[me.name], hashPassword(b.password));
     dropSessionsOf(me.name);
-    const token = createSession(me.name);
+    const token = createSession(me.name, true);
     return send(res, 200, { ok: true }, { 'Set-Cookie': cookie(token, SESSION_MS / 1000) });
   }
 
@@ -1090,20 +1201,98 @@ async function handle(req, res) {
     if (db.users[name]) throw fail(409, 'Nama pengguna sudah dipakai');
     if (!validPass(b.password)) throw fail(400, 'Kata sandi minimal 8 karakter');
     const role = b.role === 'admin' ? 'admin' : 'user';
-    db.users[name] = Object.assign({ role, created: Date.now() }, hashPassword(b.password)); save();
+    const radius = Math.max(100, Math.min(500000, Math.round(+b.radius || 2000)));
+    const gpsMode = String(b.gpsMode || 'strict');
+    let gps = null, gpsAutoBind = false;
+    if (role !== 'admin') {
+      if (gpsMode === 'manual') {
+        const lat = +b.lat, lng = +b.lng;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+          throw fail(400, 'Koordinat GPS manual tidak valid (contoh: -6.20000, 106.81666)');
+        }
+        gps = { lat: +lat.toFixed(5), lng: +lng.toFixed(5), radius, updatedAt: Date.now(), by: me.name };
+      } else if (gpsMode === 'autobind') {
+        gpsAutoBind = true;
+      }
+    }
+    db.users[name] = Object.assign({ role, created: Date.now(), gps, gpsAutoBind, gpsRadius: radius }, hashPassword(b.password)); save();
     return send(res, 201, publicUser(name));
   }
-  m = /^\/api\/users\/([a-z0-9._-]+)(\/password)?$/.exec(p);
+  m = /^\/api\/users\/([a-z0-9._-]+)(\/password|\/gps)?$/.exec(p);
   if (m) {
     needAdmin();
     const name = m[1];
     if (!db.users[name]) throw fail(404, 'Pengguna tidak ditemukan');
-    if (m[2] && method === 'POST') {
+    if (m[2] === '/password' && method === 'POST') {
       const b = await readBody(req, 4096);
       if (!validPass(b.password)) throw fail(400, 'Kata sandi minimal 8 karakter');
       Object.assign(db.users[name], hashPassword(b.password));
       dropSessionsOf(name); save();
       return send(res, 200, { ok: true });
+    }
+    if (m[2] === '/gps' && method === 'POST') {
+      const b = await readBody(req, 4096);
+      const u = db.users[name];
+      const action = String(b.action || '');
+      const radius = Math.max(100, Math.min(500000, Math.round(+b.radius || u.gpsRadius || (u.gps && u.gps.radius) || 2000)));
+      if (action === 'approve') {
+        if (!u.pendingGps || typeof u.pendingGps.lat !== 'number' || typeof u.pendingGps.lng !== 'number') {
+          throw fail(400, 'Tidak ada permintaan lokasi GPS yang menunggu persetujuan');
+        }
+        u.gps = {
+          lat: u.pendingGps.lat,
+          lng: u.pendingGps.lng,
+          radius,
+          updatedAt: Date.now(),
+          by: me.name,
+          lastLat: u.pendingGps.lat,
+          lastLng: u.pendingGps.lng,
+          lastAcc: u.pendingGps.accuracy || 0,
+          lastAt: u.pendingGps.at || Date.now()
+        };
+        u.pendingGps = null;
+        u.gpsAutoBind = false;
+        u.gpsRadius = radius;
+        save();
+        return send(res, 200, publicUser(name));
+      }
+      if (action === 'set') {
+        const lat = +b.lat, lng = +b.lng;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+          throw fail(400, 'Koordinat latitude/longitude tidak valid');
+        }
+        u.gps = {
+          lat: +lat.toFixed(5),
+          lng: +lng.toFixed(5),
+          radius,
+          updatedAt: Date.now(),
+          by: me.name
+        };
+        u.pendingGps = null;
+        u.gpsAutoBind = false;
+        u.gpsRadius = radius;
+        dropSessionsOf(name);
+        save();
+        return send(res, 200, publicUser(name));
+      }
+      if (action === 'autobind') {
+        u.gps = null;
+        u.pendingGps = null;
+        u.gpsAutoBind = true;
+        u.gpsRadius = radius;
+        dropSessionsOf(name);
+        save();
+        return send(res, 200, publicUser(name));
+      }
+      if (action === 'clear') {
+        u.gps = null;
+        u.pendingGps = null;
+        u.gpsAutoBind = false;
+        dropSessionsOf(name);
+        save();
+        return send(res, 200, publicUser(name));
+      }
+      throw fail(400, 'Aksi GPS tidak dikenal');
     }
     if (!m[2] && method === 'DELETE') {
       if (name === me.name) throw fail(400, 'Kamu tidak bisa menghapus akunmu sendiri');

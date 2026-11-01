@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.1">
+<link rel="stylesheet" href="style.css?v=1.7.2">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -57,7 +57,7 @@
     <label>Kata sandi<input id="loginPass" name="password" type="password" autocomplete="current-password" required></label>
     <p class="gate-err" id="loginErr" role="alert"></p>
     <button class="btn primary" id="loginBtn" type="submit">Masuk</button>
-    <p class="gate-note">Dengan masuk, kamu setuju waktu akses, alamat IP, jenis perangkat, dan channel yang ditonton dicatat dan bisa dilihat admin. Lokasi GPS hanya dikirim kalau kamu menyetujuinya.</p>
+    <p class="gate-note">🔒 <b>Keamanan GPS Aktif:</b> Akun selain admin wajib mengaktifkan & mengizinkan lokasi GPS yang terdaftar di database user. Akun dengan lokasi GPS tidak terdaftar akan otomatis ditolak.</p>
     <a class="gate-by" href="https://zandev.id" target="_blank" rel="noopener">Design × Code by <b>Zandev</b></a>
   </form>
 </div>
@@ -241,23 +241,34 @@
     <label>Kata sandi baru (minimal 8 karakter)<input id="pwNew" type="password" autocomplete="new-password"></label>
     <button class="btn" id="pwSave" type="button">Simpan kata sandi</button>
 
-    <h3>Berbagi lokasi</h3>
-    <div class="loc-row"><span id="locState"></span><button class="btn ghost" id="locToggle" type="button">Aktifkan</button></div>
+    <h3>Keamanan lokasi GPS</h3>
+    <div class="loc-row"><span id="locState"></span><button class="btn ghost" id="locToggle" type="button">Verifikasi GPS</button></div>
 
     <button class="btn" id="openActivity" type="button" hidden>Lihat aktivitas pengguna</button>
 
     <div id="adminUsers" hidden>
-      <h3>Pengguna</h3>
+      <h3>Pengguna & Database GPS</h3>
       <ul class="pl-list user-list" id="userList"></ul>
       <h3>Tambah pengguna</h3>
       <label>Nama pengguna<input id="nuName" autocapitalize="none" spellcheck="false" placeholder="huruf kecil, angka, titik, _ atau -"></label>
       <label>Kata sandi (minimal 8 karakter)<input id="nuPass" type="password" autocomplete="new-password"></label>
       <label>Peran
         <select id="nuRole">
-          <option value="user">User: hanya menonton</option>
-          <option value="admin">Admin: kelola playlist dan pengguna</option>
+          <option value="user">User: hanya menonton (Wajib GPS)</option>
+          <option value="admin">Admin: bebas GPS & kelola sistem</option>
         </select>
       </label>
+      <div id="nuGpsBox">
+        <label>Mode Pendaftaran GPS
+          <select id="nuGpsMode">
+            <option value="strict">Wajib persetujuan Admin (Tolak sebelum disetujui)</option>
+            <option value="autobind">Kunci otomatis lokasi GPS saat login pertama (Auto-Bind)</option>
+            <option value="manual">Input koordinat GPS manual sekarang</option>
+          </select>
+        </label>
+        <label id="nuGpsCoordWrap" hidden>Koordinat GPS (Latitude, Longitude)<input id="nuGpsCoord" placeholder="Contoh: -6.20000, 106.81666"></label>
+        <label>Radius maksimal izin lokasi (meter)<input id="nuGpsRadius" type="number" min="100" max="500000" step="100" value="2000"></label>
+      </div>
       <button class="btn" id="nuAdd" type="button">Tambah pengguna</button>
     </div>
   </div>
@@ -276,10 +287,13 @@
       <select id="actType" aria-label="Jenis aktivitas">
         <option value="">Semua aktivitas</option>
         <option value="login">Masuk</option>
-        <option value="login_failed">Gagal masuk</option>
+        <option value="login_failed">Gagal masuk (sandi)</option>
+        <option value="login_gps_unregistered">Ditolak: GPS belum terdaftar</option>
+        <option value="login_gps_mismatch">Ditolak: GPS di luar radius</option>
+        <option value="login_gps_missing">Ditolak: Tanpa izin GPS</option>
         <option value="watch">Menonton</option>
         <option value="play_error">Gagal memutar</option>
-        <option value="location">Lokasi</option>
+        <option value="location">Lokasi GPS</option>
         <option value="logout">Keluar</option>
       </select>
       <button class="btn ghost" id="actRefresh" type="button">Muat ulang</button>
@@ -397,8 +411,8 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.1"></script>
-<script src="zan-sports.js?v=1.7.1"></script>
-<script src="app.js?v=1.7.1"></script>
+<script src="zan-sig.js?v=1.7.2"></script>
+<script src="zan-sports.js?v=1.7.2"></script>
+<script src="app.js?v=1.7.2"></script>
 </body>
 </html>
