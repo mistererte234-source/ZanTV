@@ -705,13 +705,17 @@ async function handle(req, res) {
       if (pipeStream) { try { pipeStream.destroy(); } catch (e) {} }
     });
 
-    async function connectUpstream(useUa) {
+    const uIp = clientIp(req);
+    async function connectUpstream(useUa, sendClientIp) {
       let curTarget = initialTarget;
       const reqHeaders = {
         'User-Agent': useUa,
-        'Accept': '*/*',
-        'Connection': 'keep-alive'
+        'Accept': '*/*'
       };
+      if (sendClientIp && uIp && !privateIp(uIp)) {
+        reqHeaders['X-Forwarded-For'] = uIp;
+        reqHeaders['X-Real-IP'] = uIp;
+      }
       if (ref) {
         reqHeaders['Referer'] = ref;
         try { reqHeaders['Origin'] = org || new URL(ref).origin; } catch (e) {}
@@ -739,14 +743,27 @@ async function handle(req, res) {
       return { res: null, target: curTarget };
     }
 
+    const isRejectedTs = (r) => {
+      if (!r) return false;
+      if (r.status === 401 || r.status === 403) return true;
+      const c = (r.headers.get('content-type') || '').toLowerCase();
+      return isTsLike && c.includes('text/html');
+    };
+
     let upRes, target = initialTarget;
     try {
-      let attempt = await connectUpstream(primaryUa);
+      let attempt = await connectUpstream(primaryUa, false);
       upRes = attempt.res;
       target = attempt.target;
-      if (upRes && (upRes.status === 401 || upRes.status === 403) && fallbackUa) {
+      if (isRejectedTs(upRes) && uIp && !privateIp(uIp)) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
-        attempt = await connectUpstream(fallbackUa);
+        attempt = await connectUpstream(primaryUa, true);
+        upRes = attempt.res;
+        target = attempt.target;
+      }
+      if (isRejectedTs(upRes) && fallbackUa) {
+        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        attempt = await connectUpstream(fallbackUa, true);
         upRes = attempt.res;
         target = attempt.target;
       }
@@ -762,6 +779,11 @@ async function handle(req, res) {
     }
 
     const ct = (upRes.headers.get('content-type') || '').toLowerCase();
+    if (isTsLike && ct.includes('text/html')) {
+      try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ error: 'Token stream dikunci ke IP perangkat asal atau VLC masih terbuka' }));
+    }
     const isM3u8 = ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname);
     const suffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
       (ref ? '&ref=' + encodeURIComponent(ref) : '') +

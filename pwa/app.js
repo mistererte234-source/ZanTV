@@ -783,12 +783,16 @@ function startTs(url, type, token) {
   return loadLib('mpegts').then(function () {
     if (token !== E.token) return;
     if (!mpegts.isSupported()) throw { kind: 'unsupported' };
-    var p = mpegts.createPlayer({ type: type, isLive: true, url: url, cors: true },
-      { enableWorker: true, enableStashBuffer: true, stashInitialSize: 64 * 1024, liveBufferLatencyChasing: true, lazyLoad: false, autoCleanupSourceBuffer: true });
+    var absUrl = new URL(url, location.href).href;
+    var isSameOrigin = absUrl.indexOf(location.origin) === 0;
+    var p = mpegts.createPlayer(
+      { type: type, isLive: true, url: absUrl, cors: !isSameOrigin, withCredentials: isSameOrigin },
+      { enableWorker: false, enableStashBuffer: false, liveBufferLatencyChasing: true, lazyLoad: false, autoCleanupSourceBuffer: true }
+    );
     E.ts = p; E.mode = 'mpegts';
     p.on(mpegts.Events.ERROR, function (type2, detail, info) {
       if (token !== E.token) return;
-      fail({ kind: type2 === mpegts.ErrorTypes.NETWORK_ERROR ? 'network' : 'media', code: info && info.code, detail: detail }, token);
+      fail({ kind: type2 === mpegts.ErrorTypes.NETWORK_ERROR ? 'network' : 'media', code: info && info.code, detail: (info && info.msg) || detail }, token);
     });
     p.attachMediaElement(el.video);
     p.load();
@@ -802,7 +806,7 @@ el.video.addEventListener('error', function () {
 });
 
 function streamProxyUrl(rawUrl, ch) {
-  var q = '/api/stream?u=' + encodeURIComponent(rawUrl);
+  var q = location.origin + '/api/stream?u=' + encodeURIComponent(rawUrl);
   if (ch && ch.ua) q += '&ua=' + encodeURIComponent(ch.ua);
   if (ch && ch.ref) q += '&ref=' + encodeURIComponent(ch.ref);
   if (ch && ch.origin) q += '&org=' + encodeURIComponent(ch.origin);
@@ -890,16 +894,17 @@ function fail(info, token) {
 }
 
 function explain(info, ch) {
-  var mixed = location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
+  var mixed = !E.viaProxy && location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
   if (info.kind === 'drm') return { title: 'Channel ini terenkripsi', body: 'Stream ini dilindungi DRM oleh pemilik hak siar, jadi tidak bisa diputar di ZanTV.' };
   if (info.kind === 'lib') return { title: 'Komponen pemutar gagal dimuat', body: 'Periksa koneksi internet lalu coba lagi.' };
   if (info.kind === 'unsupported') return { title: 'Format ini tidak didukung browser', body: 'Alamat seperti rtmp:// atau udp:// tidak bisa diputar di browser. Coba buka di VLC.' };
-  if (info.code === 401 || info.code === 403 || info.code === 451) return { title: 'Channel dibatasi pemilik siaran', body: 'Server stream menolak akses (kode ' + info.code + '). Biasanya karena dibatasi wilayah, butuh langganan, atau tautannya sudah kedaluwarsa.' };
+  if (info.code === 401 || info.code === 403 || info.code === 451) return { title: 'Channel dibatasi pemilik siaran', body: 'Server stream menolak akses (kode ' + info.code + '). Jika ini stream Stalker/MAC, pastikan VLC sudah ditutup (maksimal 1 koneksi aktif) atau token tidak dikunci ke IP rumah.' };
   if (info.code === 404 || info.code === 410) return { title: 'Alamat stream sudah tidak aktif', body: 'Server menjawab dengan kode ' + info.code + '. Channel ini kemungkinan sudah mati atau pindah alamat. Coba perbarui playlist.' };
+  if (info.code === 502) return { title: 'Server stream menolak koneksi VPS', body: 'Server ZanTV gagal mengambil stream (kode 502). Provider stream kemungkinan mengunci token ke IP internet rumahmu (memblokir IP VPS) atau tautannya sudah kedaluwarsa.' };
   if (mixed) return { title: 'Stream http diblokir browser', body: 'ZanTV dibuka lewat https, sedangkan alamat stream ini masih http dan servernya tidak menyediakan versi https. Browser memblokir campuran ini demi keamanan. Buka di VLC, atau jalankan ZanTV dari http://localhost.' };
-  if (ch.needsHeaders) return { title: 'Channel ini butuh pengaturan khusus', body: 'Playlist meminta User-Agent atau Referer tertentu, dan halaman web tidak diizinkan mengaturnya. Channel seperti ini biasanya hanya jalan di VLC atau aplikasi IPTV.' };
-  if (info.kind === 'network') return { title: 'Stream tidak bisa dijangkau', body: 'Server sedang mati, alamatnya berubah, atau server tidak mengizinkan diputar dari browser (CORS). Coba lagi nanti atau buka di VLC.' };
-  return { title: 'Stream gagal diputar', body: 'Format video dari server ini tidak bisa dibaca browser ini. Coba browser lain atau VLC.' };
+  if (ch.needsHeaders && !E.viaProxy) return { title: 'Channel ini butuh pengaturan khusus', body: 'Playlist meminta User-Agent atau Referer tertentu, dan halaman web tidak diizinkan mengaturnya. Channel seperti ini biasanya hanya jalan di VLC atau aplikasi IPTV.' };
+  if (info.kind === 'network') return { title: 'Stream tidak bisa dijangkau', body: 'Server sedang mati, token stream hanya berlaku di IP rumah (bukan IP VPS), atau koneksi terputus' + (info.code && info.code > 0 ? ' (kode ' + info.code + ')' : '') + '.' };
+  return { title: 'Stream gagal diputar', body: 'Format video dari server ini tidak bisa dibaca browser ini atau stream kosong. Coba pastikan VLC sudah ditutup lalu klik Coba lagi.' };
 }
 
 function setBusy(on) { el.spinner.hidden = !on; }
