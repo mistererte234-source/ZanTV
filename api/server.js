@@ -20,6 +20,9 @@ const zlib = require('zlib');
 const { Readable } = require('stream');
 const { spawn, execFileSync } = require('child_process');
 
+// Banyak server IPTV memakai sertifikat SSL self-signed / rantai tidak lengkap
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 let HAS_FFMPEG = false;
 try {
   execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 3000 });

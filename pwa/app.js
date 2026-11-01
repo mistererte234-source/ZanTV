@@ -751,22 +751,35 @@ function loadLib(name) {
   return libPromises[name];
 }
 
-var E = { token: 0, retries: 0, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false, serverTranscode: false };
-var QUAL = { mode: LS.get('qual-mode', 'auto'), level: -1, serverQ: +LS.get('qual-server-q', 0) || 0, levels: [], activeHeight: 0 };
+var E = { token: 0, retries: 0, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false, serverTranscode: false, probeAc: null };
+var savedQualMode = LS.get('qual-mode', 'auto');
+if (savedQualMode === 'server') savedQualMode = 'target';
+var QUAL = {
+  mode: savedQualMode,
+  level: -1,
+  targetH: +LS.get('qual-target-h', +LS.get('qual-server-q', 0) || 0) || 0,
+  serverQ: 0,
+  levels: [],
+  activeHeight: 0,
+  clientScaledH: 0
+};
 var CC = { mode: LS.get('cc-mode', 'off'), srcLang: LS.get('cc-src', 'en-US'), hasTrack: false, sr: null, srRunning: false, hideTimer: null, lastRaw: '', reqSeq: 0, cache: {} };
 
 function destroyEngine() {
   clearTimeout(E.stall);
+  if (E.probeAc) { try { E.probeAc.abort(); } catch (e) {} E.probeAc = null; }
   stopSpeechCc();
   clearCcDisplay();
   CC.hasTrack = false;
   QUAL.levels = [];
   QUAL.activeHeight = 0;
+  QUAL.clientScaledH = 0;
   if (E.hls) { try { E.hls.destroy(); } catch (e) {} E.hls = null; }
   if (E.dash) { try { E.dash.reset(); } catch (e) {} E.dash = null; }
   if (E.ts) { try { E.ts.pause(); E.ts.unload(); E.ts.detachMediaElement(); E.ts.destroy(); } catch (e) {} E.ts = null; }
   E.mode = null;
   E.serverTranscode = false;
+  QUAL.serverQ = 0;
   el.video.removeAttribute('src');
   try { el.video.load(); } catch (e) {}
   updateQualBadge();
@@ -825,17 +838,18 @@ function startHls(url, token) {
   return loadLib('hls').then(function () {
     if (token !== E.token) return;
     if (!window.Hls || !Hls.isSupported()) { startNative(url); return; }
+    var isEco = QUAL.mode === 'saver' || (QUAL.mode === 'target' && QUAL.targetH > 0 && QUAL.targetH <= 480);
     var hls = new Hls({
       enableWorker: true,
       enableWebVTT: true,
       enableIMSC1: true,
       enableCEA708Captions: true,
-      capLevelToPlayerSize: QUAL.mode === 'saver',
-      backBufferLength: 30,
-      maxBufferLength: 30,
-      maxMaxBufferLength: 60,
+      capLevelToPlayerSize: isEco,
+      backBufferLength: isEco ? 6 : 30,
+      maxBufferLength: isEco ? 8 : 30,
+      maxMaxBufferLength: isEco ? 16 : 60,
       maxBufferHole: 1.5,
-      liveSyncDurationCount: 4,
+      liveSyncDurationCount: isEco ? 3 : 4,
       liveMaxLatencyDurationCount: 10,
       manifestLoadingMaxRetry: 4,
       levelLoadingMaxRetry: 4,
@@ -1031,16 +1045,12 @@ function play(ch, opts) {
   var kind = kindOf(ch.url);
   var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
   var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(ch.url);
-  var canFfmpeg = !ME || ME.hasFfmpeg !== false;
-  var canMpegts = !!(window.MediaSource || window.ManagedMediaSource);
-  var wantServerQ = 0;
-  if (canFfmpeg && canMpegts && !opts.noTranscode && kind !== 'unsupported' && kind !== 'dash') {
-    if (QUAL.mode === 'server' && QUAL.serverQ) wantServerQ = QUAL.serverQ;
-    else if (QUAL.mode === 'saver' && isTsOrStalker) wantServerQ = 480;
-  }
+  // Hanya gunakan forceServerQ jika sudah diverifikasi lewat preflight probe
+  var wantServerQ = (opts.forceServerQ && !opts.noTranscode) ? opts.forceServerQ : 0;
   var useProxy = !!(wantServerQ || opts.viaProxy || ch.needsHeaders || isHttpOnHttps || isTsOrStalker) && kind !== 'unsupported' && kind !== 'dash';
   E.viaProxy = useProxy;
   E.serverTranscode = !!wantServerQ;
+  QUAL.serverQ = wantServerQ;
   var url = useProxy ? streamProxyUrl(ch.url, ch, wantServerQ) : upgradeUrl(ch.url);
   if (wantServerQ) {
     kind = 'mpegts';
@@ -1082,8 +1092,11 @@ function lockReason(info) {
 function fail(info, token) {
   if (token !== E.token) return;
   if (E.serverTranscode && S.playing) {
-    el.nowMeta.textContent = 'Kompresi server tidak tersedia untuk channel ini, beralih ke resolusi asli…';
-    play(S.playing, { retry: true, viaProxy: true, noTranscode: true });
+    S.playing._noServerTranscode = true;
+    E.serverTranscode = false;
+    QUAL.serverQ = 0;
+    el.nowMeta.textContent = 'Kompresi server tidak tersedia untuk channel ini, kembali ke jalur langsung…';
+    play(S.playing, { retry: true, viaProxy: false, noTranscode: true });
     return;
   }
   if (!E.viaProxy && S.playing && info.kind !== 'drm' && info.kind !== 'unsupported' && info.kind !== 'lib' && kindOf(S.playing.url) !== 'dash') {
@@ -1136,6 +1149,9 @@ el.video.addEventListener('playing', function () {
   clearTimeout(E.stall); setBusy(false); E.retries = 0;
   el.liveTag.hidden = false; syncPlay(); updateNow();
   if (el.video.videoHeight) QUAL.activeHeight = el.video.videoHeight;
+  if (QUAL.mode === 'saver' || (QUAL.mode === 'target' && QUAL.targetH > 0)) {
+    applyClientEcoMode(QUAL.mode === 'saver' ? 480 : QUAL.targetH);
+  }
   updateQualBadge();
   renderQualMenu();
   bindVideoTextTracks();
@@ -1182,35 +1198,66 @@ el.video.addEventListener('volumechange', syncMute);
 /* ------------------------------------------------------------------ */
 /* Pilihan Resolusi (Quality Selector) & Mode Hemat Data               */
 /* ------------------------------------------------------------------ */
-function pickSaverLevelIndex(levels) {
+function pickLevelForTarget(levels, maxH) {
   if (!levels || !levels.length) return -1;
-  var bestIdx = -1, bestH = -1, minIdx = 0, minH = Infinity;
+  var bestIdx = -1, bestScore = -1, minIdx = levels[0].index, minScore = Infinity;
   for (var i = 0; i < levels.length; i++) {
     var h = levels[i].height || 0;
     var br = levels[i].bitrate || 0;
     var score = h || Math.round(br / 2000);
-    if (score > 0 && score < minH) { minH = score; minIdx = levels[i].index; }
-    if ((h > 0 && h <= 480) || (!h && br > 0 && br <= 1100000)) {
-      if (score >= bestH) { bestH = score; bestIdx = levels[i].index; }
+    if (score > 0 && score < minScore) { minScore = score; minIdx = levels[i].index; }
+    var maxBr = maxH <= 360 ? 700000 : maxH <= 480 ? 1200000 : maxH <= 720 ? 2800000 : 99999999;
+    if ((h > 0 && h <= maxH) || (!h && br > 0 && br <= maxBr)) {
+      if (score >= bestScore) { bestScore = score; bestIdx = levels[i].index; }
     }
   }
   return bestIdx >= 0 ? bestIdx : minIdx;
+}
+
+function applyClientEcoMode(targetH) {
+  var realH = (el.video && el.video.videoHeight) || QUAL.activeHeight || 0;
+  if (!targetH || targetH <= 0 || (realH > 0 && targetH >= realH)) {
+    QUAL.clientScaledH = 0;
+    if (E.hls && E.hls.config) {
+      E.hls.config.maxBufferLength = 30;
+      E.hls.config.maxMaxBufferLength = 60;
+      E.hls.config.backBufferLength = 30;
+    }
+    return;
+  }
+  QUAL.clientScaledH = targetH;
+  if (E.hls && E.hls.config) {
+    E.hls.config.maxBufferLength = targetH <= 360 ? 5 : targetH <= 480 ? 7 : 12;
+    E.hls.config.maxMaxBufferLength = targetH <= 360 ? 10 : targetH <= 480 ? 14 : 24;
+    E.hls.config.backBufferLength = 4;
+  }
 }
 
 function applyHlsQuality(hls) {
   if (!hls) return;
   if (QUAL.mode === 'auto') {
     hls.autoLevelCapping = -1;
-    hls.currentLevel = -1;
+    hls.nextLevel = -1;
+    applyClientEcoMode(0);
   } else if (QUAL.mode === 'saver') {
-    var capIdx = pickSaverLevelIndex(QUAL.levels);
-    if (capIdx >= 0) {
+    var capIdx = pickLevelForTarget(QUAL.levels, 480);
+    if (capIdx >= 0 && QUAL.levels.length > 1) {
       hls.autoLevelCapping = capIdx;
-      hls.currentLevel = capIdx;
+      hls.nextLevel = capIdx;
     }
+    applyClientEcoMode(480);
   } else if (QUAL.mode === 'native' && QUAL.level >= 0 && QUAL.level < (hls.levels || []).length) {
-    hls.autoLevelCapping = -1;
-    hls.currentLevel = QUAL.level;
+    hls.autoLevelCapping = QUAL.level;
+    hls.nextLevel = QUAL.level;
+    var lv = QUAL.levels[QUAL.level];
+    applyClientEcoMode(lv && lv.height ? lv.height : 0);
+  } else if (QUAL.mode === 'target' && QUAL.targetH > 0) {
+    var tIdx = pickLevelForTarget(QUAL.levels, QUAL.targetH);
+    if (tIdx >= 0 && QUAL.levels.length > 1) {
+      hls.autoLevelCapping = tIdx;
+      hls.nextLevel = tIdx;
+    }
+    applyClientEcoMode(QUAL.targetH);
   }
 }
 
@@ -1219,13 +1266,20 @@ function applyDashQuality(p) {
   try {
     if (QUAL.mode === 'auto') {
       p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: -1 } } } });
+      applyClientEcoMode(0);
     } else if (QUAL.mode === 'saver') {
       p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: 1000 } } } });
-      var idx = pickSaverLevelIndex(QUAL.levels);
+      var idx = pickLevelForTarget(QUAL.levels, 480);
       if (idx >= 0) p.setQualityFor('video', idx);
+      applyClientEcoMode(480);
     } else if (QUAL.mode === 'native' && QUAL.level >= 0) {
       p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
       p.setQualityFor('video', QUAL.level);
+    } else if (QUAL.mode === 'target' && QUAL.targetH > 0) {
+      var tIdx = pickLevelForTarget(QUAL.levels, QUAL.targetH);
+      p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
+      if (tIdx >= 0) p.setQualityFor('video', tIdx);
+      applyClientEcoMode(QUAL.targetH);
     }
   } catch (e) {}
 }
@@ -1241,26 +1295,27 @@ function updateQualBadge() {
   var btn = $('#qualBtn');
   var pill = $('#qualStatusPill');
   if (!badge || !btn) return;
-  var h = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
+  var realH = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
+  var effH = (QUAL.clientScaledH && (!realH || QUAL.clientScaledH < realH)) ? QUAL.clientScaledH : realH;
   var text = 'AUTO';
   var pillText = 'Otomatis';
   if (E.serverTranscode && QUAL.serverQ) {
     text = QUAL.serverQ + 'p⚡';
     pillText = 'Kompresi Server ' + QUAL.serverQ + 'p';
-  } else if (QUAL.mode === 'server' && QUAL.serverQ) {
-    text = QUAL.serverQ + 'p⚡';
-    pillText = 'Kompresi Server ' + QUAL.serverQ + 'p';
   } else if (QUAL.mode === 'saver') {
-    text = h ? 'HEMAT·' + h + 'p' : 'HEMAT';
-    pillText = h ? 'Hemat Data (' + h + 'p)' : 'Hemat Data (≤480p)';
+    text = effH ? 'HEMAT·' + effH + 'p' : 'HEMAT';
+    pillText = effH ? 'Hemat Data (' + effH + 'p)' : 'Hemat Data (≤480p)';
+  } else if (QUAL.mode === 'target' && QUAL.targetH) {
+    text = QUAL.targetH + 'p';
+    pillText = 'Dikunci ' + QUAL.targetH + 'p' + (QUAL.clientScaledH ? ' (Hemat Buffer)' : '');
   } else if (QUAL.mode === 'native' && QUAL.level >= 0) {
     var lv = QUAL.levels[QUAL.level];
-    var lh = (lv && lv.height) || h;
+    var lh = (lv && lv.height) || effH;
     text = lh ? lh + 'p' : 'MANUAL';
     pillText = lh ? 'Dikunci ' + lh + 'p' : 'Manual';
   } else {
-    text = h ? 'AUTO·' + h + 'p' : 'AUTO';
-    pillText = h ? 'Otomatis (' + h + 'p aktif)' : 'Otomatis';
+    text = realH ? 'AUTO·' + realH + 'p' : 'AUTO';
+    pillText = realH ? 'Otomatis (' + realH + 'p aktif)' : 'Otomatis';
   }
   badge.textContent = text;
   btn.setAttribute('aria-pressed', String(QUAL.mode !== 'auto'));
@@ -1270,21 +1325,22 @@ function updateQualBadge() {
 function renderQualMenu() {
   var box = $('#qualList');
   if (!box) return;
-  var h = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
+  var realH = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
   var items = [];
   items.push({
     qmode: 'auto', level: -1, sq: 0,
     active: QUAL.mode === 'auto',
     label: '⚡ Otomatis (Sesuai Kecepatan Internet)',
-    tag: h && QUAL.mode === 'auto' ? h + 'p' : 'ABR'
+    tag: realH && QUAL.mode === 'auto' ? realH + 'p' : 'ABR'
   });
   items.push({
-    qmode: 'saver', level: -1, sq: 0,
+    qmode: 'saver', level: -1, sq: 480,
     active: QUAL.mode === 'saver',
-    label: '🍃 Mode Hemat Data (Kunci SD ≤ 480p)',
+    label: '🍃 Mode Hemat Data (SD ≤ 480p)',
     tag: 'Hemat Kuota'
   });
 
+  var hasNativeHeights = {};
   if (QUAL.levels && QUAL.levels.length > 1) {
     var sorted = QUAL.levels.slice().sort(function (a, b) {
       return (b.height - a.height) || (b.bitrate - a.bitrate);
@@ -1294,33 +1350,33 @@ function renderQualMenu() {
       var key = (lv.height || 0) + ':' + Math.round((lv.bitrate || 0) / 100000);
       if (seen[key]) return;
       seen[key] = true;
+      if (lv.height) hasNativeHeights[lv.height] = true;
       var tag = fmtBitrate(lv.bitrate);
       var name = lv.height ? (lv.height + 'p' + (lv.height >= 1080 ? ' FHD' : lv.height >= 720 ? ' HD' : ' SD')) : ('Level ' + (lv.index + 1));
       items.push({
-        qmode: 'native', level: lv.index, sq: 0,
-        active: QUAL.mode === 'native' && QUAL.level === lv.index,
-        label: '🎬 ' + name + ' (Bawaan Stream)',
+        qmode: 'native', level: lv.index, sq: lv.height || 0,
+        active: (QUAL.mode === 'native' && QUAL.level === lv.index) || (QUAL.mode === 'target' && lv.height && QUAL.targetH === lv.height),
+        label: '🎬 ' + name,
         tag: tag || 'Asli'
       });
     });
   }
 
-  var canFfmpeg = !ME || ME.hasFfmpeg !== false;
-  var canMpegts = !!(window.MediaSource || window.ManagedMediaSource);
-  if (canFfmpeg && canMpegts) {
-    [
-      { q: 720, name: '🚀 720p HD (Kompresi Server)', tag: '~1.6 Mbps' },
-      { q: 480, name: '🚀 480p SD (Kompresi Server)', tag: '~850 kbps' },
-      { q: 360, name: '🚀 360p Lancar (Kompresi Server)', tag: '~480 kbps' }
-    ].forEach(function ( preset) {
-      items.push({
-        qmode: 'server', level: -1, sq: preset.q,
-        active: QUAL.mode === 'server' && QUAL.serverQ === preset.q,
-        label: preset.name,
-        tag: preset.tag
-      });
+  [
+    { q: 1080, name: '🎬 1080p Full HD', tag: 'FHD' },
+    { q: 720, name: '🎬 720p HD', tag: '~1.6 Mbps' },
+    { q: 480, name: '🎬 480p SD (Stabil)', tag: '~850 kbps' },
+    { q: 360, name: '🎬 360p Lancar (Hemat)', tag: '~480 kbps' }
+  ].forEach(function (preset) {
+    if (hasNativeHeights[preset.q]) return;
+    if (preset.q === 1080 && realH > 0 && realH < 1080) return;
+    items.push({
+      qmode: 'target', level: -1, sq: preset.q,
+      active: QUAL.mode === 'target' && QUAL.targetH === preset.q,
+      label: preset.name,
+      tag: preset.tag
     });
-  }
+  });
 
   box.innerHTML = items.map(function (it) {
     return '<button type="button" class="player-pop-opt" data-qmode="' + esc(it.qmode) + '" data-level="' + it.level + '" data-sq="' + it.sq + '" aria-checked="' + String(!!it.active) + '">' +
@@ -1330,35 +1386,99 @@ function renderQualMenu() {
   }).join('');
 }
 
+function probeServerTranscode(ch, targetH) {
+  if (!ch || ch._noServerTranscode || !ME || ME.hasFfmpeg !== true) return;
+  if (!(window.MediaSource || window.ManagedMediaSource)) return;
+  if (E.probeAc) { try { E.probeAc.abort(); } catch (e) {} E.probeAc = null; }
+  var ac = new AbortController();
+  E.probeAc = ac;
+  var timer = setTimeout(function () { try { ac.abort(); } catch (e) {} }, 4500);
+  var probeUrl = streamProxyUrl(ch.url, ch, targetH);
+
+  fetch(probeUrl, { method: 'GET', credentials: 'same-origin', signal: ac.signal }).then(function (r) {
+    if (!r.ok || !r.body) {
+      ch._noServerTranscode = true;
+      clearTimeout(timer);
+      try { ac.abort(); } catch (e) {}
+      return;
+    }
+    var reader = r.body.getReader();
+    return reader.read().then(function (chunk) {
+      clearTimeout(timer);
+      try { reader.cancel(); } catch (e) {}
+      try { ac.abort(); } catch (e) {}
+      if (!chunk || !chunk.value || chunk.value.byteLength < 188) {
+        ch._noServerTranscode = true;
+        return;
+      }
+      // Pastikan stream yang sedang diputar masih sama dan user masih memilih targetH
+      var curTarget = QUAL.mode === 'saver' ? 480 : (QUAL.mode === 'target' ? QUAL.targetH : 0);
+      if (S.playing === ch && curTarget === targetH && !E.serverTranscode) {
+        play(ch, { viaProxy: true, forceServerQ: targetH });
+      }
+    });
+  }).catch(function () {
+    clearTimeout(timer);
+    ch._noServerTranscode = true;
+  });
+}
+
 function selectQualityOption(qmode, level, sq) {
-  var prevServer = E.serverTranscode ? QUAL.serverQ : 0;
+  if (E.probeAc) { try { E.probeAc.abort(); } catch (e) {} E.probeAc = null; }
+  var wasServerTranscode = E.serverTranscode;
   QUAL.mode = qmode;
   QUAL.level = level;
-  QUAL.serverQ = sq || 0;
+  QUAL.targetH = sq || 0;
   LS.set('qual-mode', qmode);
-  LS.set('qual-server-q', QUAL.serverQ);
+  LS.set('qual-target-h', QUAL.targetH);
+  LS.set('qual-server-q', 0);
+
+  if (!S.playing) {
+    updateQualBadge();
+    renderQualMenu();
+    return;
+  }
+
+  // Jika sebelumnya sedang dalam mode serverTranscode dan user ganti ke Auto / 1080p, kembalikan ke stream asli
+  if (wasServerTranscode && (qmode === 'auto' || sq >= 1080)) {
+    toast('Kembali ke resolusi asli stream…');
+    play(S.playing, { viaProxy: false, noTranscode: true });
+    return;
+  }
+
+  // Layer 1 & Layer 2: Terapkan langsung di browser tanpa memutus stream!
+  if (E.hls) {
+    applyHlsQuality(E.hls);
+  } else if (E.dash) {
+    applyDashQuality(E.dash);
+  } else {
+    applyClientEcoMode(qmode === 'saver' ? 480 : (qmode === 'target' ? QUAL.targetH : 0));
+  }
 
   updateQualBadge();
   renderQualMenu();
 
-  if (!S.playing) return;
-  var kind = kindOf(S.playing.url);
-  var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(S.playing.url);
-  var nextServer = (qmode === 'server' && sq) ? sq : (qmode === 'saver' && isTsOrStalker ? 480 : 0);
+  var wantedH = qmode === 'saver' ? 480 : (qmode === 'target' ? QUAL.targetH : 0);
+  var realH = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
 
-  if (prevServer !== nextServer) {
-    toast(nextServer ? 'Mengubah resolusi ke ' + nextServer + 'p via Kompresi Server…' : 'Kembali ke resolusi asli stream…');
-    play(S.playing, { viaProxy: true });
+  if (qmode === 'auto') {
+    toast('Resolusi Otomatis aktif');
     return;
   }
-  if (E.hls) {
-    applyHlsQuality(E.hls);
-    toast(qmode === 'saver' ? 'Mode Hemat Data aktif (≤ 480p)' : qmode === 'auto' ? 'Resolusi Otomatis aktif' : 'Resolusi dikunci');
-  } else if (E.dash) {
-    applyDashQuality(E.dash);
-    toast(qmode === 'saver' ? 'Mode Hemat Data aktif (≤ 480p)' : qmode === 'auto' ? 'Resolusi Otomatis aktif' : 'Resolusi dikunci');
-  } else if (qmode === 'saver' && !nextServer) {
-    toast('Mode Hemat Data disimpan');
+
+  // Jika stream multi-bitrate sudah punya level yang cocok, cukup pakai native ABR switching
+  if (QUAL.levels && QUAL.levels.length > 1) {
+    toast(qmode === 'saver' ? 'Mode Hemat Data aktif (≤ 480p)' : 'Resolusi diubah ke ' + (wantedH || '') + 'p');
+    return;
+  }
+
+  // Layer 3: Jika stream hanya punya 1 resolusi tinggi (misal 1080p) dan server punya FFmpeg,
+  // cek dulu di background apakah VPS bisa menjangkau stream ini (agar tidak pernah error 502!)
+  if (wantedH > 0 && wantedH <= 720 && (!realH || realH > wantedH) && ME && ME.hasFfmpeg === true && !S.playing._noServerTranscode) {
+    toast('Resolusi ' + wantedH + 'p (Hemat Buffer) aktif · Mengecek kompresi server…');
+    probeServerTranscode(S.playing, wantedH);
+  } else {
+    toast(qmode === 'saver' ? 'Mode Hemat Data (≤ 480p) aktif' : 'Resolusi ' + wantedH + 'p (Mode Hemat Buffer) aktif');
   }
 }
 
