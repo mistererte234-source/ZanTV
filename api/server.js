@@ -120,20 +120,91 @@ async function assertPublicUrl(u) {
   if (!addrs.length || addrs.some((a) => privateIp(a.address))) throw new Error('Alamat menuju jaringan internal tidak diizinkan');
   return url;
 }
-async function fetchM3U(u) {
+function isDirectStreamUrl(u) {
+  const s = String(u || '').toLowerCase();
+  const pathPart = s.split(/[?#]/)[0];
+  if (/\.(ts|mp4|mkv|flv|mpd|webm|aac|mp3)$/.test(pathPart)) return true;
+  if (/[?&](extension|output|format)=(ts|mpegts|flv|mp4)\b/.test(s)) return true;
+  if (/\/play\/live\.php\b/.test(s) || /\/live\/play\//.test(s)) return true;
+  return false;
+}
+function wrapSingleStreamM3U(u, name) {
+  const chName = String(name || 'Direct Stream').replace(/[\r\n,]+/g, ' ').trim() || 'Direct Stream';
+  return `#EXTM3U\n#EXTINF:-1 group-title="Direct Stream",${chName}\n${String(u).trim()}\n`;
+}
+async function fetchM3U(u, fallbackName) {
   let url = await assertPublicUrl(u);
-  for (let hop = 0; hop < 4; hop++) {
-    const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(25000), headers: { 'User-Agent': 'ZanTV/1.2' } });
+  if (isDirectStreamUrl(u)) return wrapSingleStreamM3U(u, fallbackName);
+  for (let hop = 0; hop < 6; hop++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 25000);
+    let r;
+    try {
+      r = await fetch(url, { redirect: 'manual', signal: ac.signal, headers: { 'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20' } });
+    } catch (e) {
+      clearTimeout(timer);
+      throw e;
+    }
     if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
+      clearTimeout(timer);
       url = await assertPublicUrl(new URL(r.headers.get('location'), url).toString());
+      if (isDirectStreamUrl(url.toString())) return wrapSingleStreamM3U(u, fallbackName);
       continue;
     }
-    if (!r.ok) throw new Error('Server playlist menjawab kode ' + r.status);
+    if (!r.ok) {
+      clearTimeout(timer);
+      throw new Error('Server playlist menjawab kode ' + r.status);
+    }
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    if (/^(video|audio)\/|application\/octet-stream/.test(ct)) {
+      clearTimeout(timer);
+      ac.abort();
+      return wrapSingleStreamM3U(u, fallbackName);
+    }
     const len = +(r.headers.get('content-length') || 0);
-    if (len > MAX_M3U) throw new Error('Playlist terlalu besar');
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (buf.length > MAX_M3U) throw new Error('Playlist terlalu besar');
-    return buf.toString('utf8');
+    if (len > MAX_M3U) {
+      clearTimeout(timer);
+      ac.abort();
+      throw new Error('Playlist terlalu besar');
+    }
+    try {
+      const reader = r.body ? r.body.getReader() : null;
+      if (!reader) {
+        clearTimeout(timer);
+        return wrapSingleStreamM3U(u, fallbackName);
+      }
+      const chunks = [];
+      let total = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = Buffer.from(value);
+        chunks.push(chunk);
+        total += chunk.length;
+        if (total >= 376 && chunks[0][0] === 0x47) {
+          const firstBuf = Buffer.concat(chunks, total);
+          if (firstBuf[0] === 0x47 && firstBuf[188] === 0x47) {
+            clearTimeout(timer);
+            ac.abort();
+            return wrapSingleStreamM3U(u, fallbackName);
+          }
+        }
+        if (total > MAX_M3U) {
+          clearTimeout(timer);
+          ac.abort();
+          throw new Error('Playlist terlalu besar');
+        }
+      }
+      clearTimeout(timer);
+      const text = Buffer.concat(chunks, total).toString('utf8');
+      if (!countChannels(text) && /#EXT-X-(TARGETDURATION|STREAM-INF|MEDIA-SEQUENCE)/i.test(text)) {
+        return wrapSingleStreamM3U(u, fallbackName);
+      }
+      return text;
+    } catch (e) {
+      clearTimeout(timer);
+      throw e;
+    }
   }
   throw new Error('Terlalu banyak pengalihan alamat');
 }
@@ -171,7 +242,10 @@ function streamUrls(text) {
   const out = [];
   for (const line of String(text).split(/\r?\n/)) {
     const l = line.trim();
-    if (l && l[0] !== '#' && /^http:\/\//i.test(l)) out.push(l.split('|')[0]);
+    if (l && l[0] !== '#' && /^http:\/\//i.test(l)) {
+      const base = l.split('|')[0];
+      if (!isDirectStreamUrl(base)) out.push(base);
+    }
   }
   return out;
 }
@@ -548,7 +622,7 @@ async function handle(req, res) {
     if (m[2] === '/refresh' && method === 'POST') {
       needAdmin();
       if (pl.kind !== 'url') throw fail(400, 'Playlist dari file tidak bisa diperbarui otomatis. Unggah ulang file-nya.');
-      const text = await fetchM3U(pl.source).catch((e) => { throw fail(502, e.message); });
+      const text = await fetchM3U(pl.source, pl.name).catch((e) => { throw fail(502, e.message); });
       const count = countChannels(text);
       if (!count) throw fail(422, 'Isinya bukan playlist M3U atau tidak berisi channel');
       fs.writeFileSync(file, text);
@@ -566,7 +640,7 @@ async function handle(req, res) {
       if (b.referer !== undefined) pl.referer = String(b.referer || '').trim().slice(0, 300);
       if (b.userAgent !== undefined) pl.userAgent = String(b.userAgent || '').trim().slice(0, 300);
       if (newUrl && newUrl !== pl.source) {
-        const text = await fetchM3U(newUrl).catch((e) => { throw fail(502, e.message); });
+        const text = await fetchM3U(newUrl, name).catch((e) => { throw fail(502, e.message); });
         const count = countChannels(text);
         if (!count) throw fail(422, 'Isinya bukan playlist M3U atau tidak berisi channel');
         fs.writeFileSync(file, text);
@@ -595,7 +669,7 @@ async function handle(req, res) {
     let text, kind, source;
     if (b.url) {
       kind = 'url'; source = String(b.url).trim();
-      text = await fetchM3U(source).catch((e) => { throw fail(502, e.message); });
+      text = await fetchM3U(source, name).catch((e) => { throw fail(502, e.message); });
     } else if (typeof b.text === 'string') {
       kind = 'file'; source = String(b.filename || 'upload.m3u').slice(0, 120); text = b.text;
     } else throw fail(400, 'Isi alamat playlist atau unggah file');
@@ -615,33 +689,66 @@ async function handle(req, res) {
     const ua = (url.searchParams.get('ua') || '').slice(0, 300);
     const ref = (url.searchParams.get('ref') || '').slice(0, 300);
     const org = (url.searchParams.get('org') || '').slice(0, 300);
-    let target = await assertPublicUrl(rawU).catch((e) => { throw fail(400, e.message); });
+    const initialTarget = await assertPublicUrl(rawU).catch((e) => { throw fail(400, e.message); });
+    const isTsLike = isDirectStreamUrl(rawU);
 
-    const reqHeaders = {
-      'User-Agent': ua || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept': '*/*'
-    };
-    if (ref) {
-      reqHeaders['Referer'] = ref;
-      try { reqHeaders['Origin'] = org || new URL(ref).origin; } catch (e) {}
-    } else if (org) {
-      reqHeaders['Origin'] = org;
-    }
-    if (req.headers['range']) reqHeaders['Range'] = req.headers['range'];
+    const VLC_UA = 'VLC/3.0.20 LibVLC/3.0.20';
+    const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    const primaryUa = ua || (isTsLike ? VLC_UA : CHROME_UA);
+    const fallbackUa = ua ? '' : (isTsLike ? CHROME_UA : VLC_UA);
 
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 25000);
-    req.on('close', () => ac.abort());
+    let pipeStream = null;
+    req.on('close', () => {
+      ac.abort();
+      if (pipeStream) { try { pipeStream.destroy(); } catch (e) {} }
+    });
 
-    let upRes;
-    try {
-      for (let hop = 0; hop < 4; hop++) {
-        upRes = await fetch(target, { redirect: 'manual', signal: ac.signal, headers: reqHeaders });
-        if (upRes.status >= 300 && upRes.status < 400 && upRes.headers.get('location')) {
-          target = await assertPublicUrl(new URL(upRes.headers.get('location'), target).toString());
+    async function connectUpstream(useUa) {
+      let curTarget = initialTarget;
+      const reqHeaders = {
+        'User-Agent': useUa,
+        'Accept': '*/*',
+        'Connection': 'keep-alive'
+      };
+      if (ref) {
+        reqHeaders['Referer'] = ref;
+        try { reqHeaders['Origin'] = org || new URL(ref).origin; } catch (e) {}
+      } else if (org) {
+        reqHeaders['Origin'] = org;
+      }
+      if (req.headers['range'] && !isTsLike) reqHeaders['Range'] = req.headers['range'];
+
+      const cookies = [];
+      for (let hop = 0; hop < 8; hop++) {
+        if (cookies.length) reqHeaders['Cookie'] = cookies.join('; ');
+        const r = await fetch(curTarget, { redirect: 'manual', signal: ac.signal, headers: reqHeaders });
+        const setCookie = typeof r.headers.getSetCookie === 'function' ? r.headers.getSetCookie() : (r.headers.get('set-cookie') ? [r.headers.get('set-cookie')] : []);
+        for (const sc of setCookie) {
+          const pair = String(sc).split(';')[0].trim();
+          if (pair && !cookies.includes(pair)) cookies.push(pair);
+        }
+        if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
+          try { if (r.body) r.body.cancel(); } catch (e) {}
+          curTarget = await assertPublicUrl(new URL(r.headers.get('location'), curTarget).toString());
           continue;
         }
-        break;
+        return { res: r, target: curTarget };
+      }
+      return { res: null, target: curTarget };
+    }
+
+    let upRes, target = initialTarget;
+    try {
+      let attempt = await connectUpstream(primaryUa);
+      upRes = attempt.res;
+      target = attempt.target;
+      if (upRes && (upRes.status === 401 || upRes.status === 403) && fallbackUa) {
+        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        attempt = await connectUpstream(fallbackUa);
+        upRes = attempt.res;
+        target = attempt.target;
       }
     } catch (e) {
       clearTimeout(timer);
@@ -680,17 +787,23 @@ async function handle(req, res) {
         }).join('\n');
         res.writeHead(200, {
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-          'Cache-Control': 'no-store'
+          'Cache-Control': 'no-store',
+          'X-Accel-Buffering': 'no'
         });
         return res.end(rewritten);
       }
-      res.writeHead(upRes.status, { 'Content-Type': ct || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      res.writeHead(upRes.status, {
+        'Content-Type': ct || 'application/octet-stream',
+        'Cache-Control': 'no-store',
+        'X-Accel-Buffering': 'no'
+      });
       return res.end(buf);
     }
 
     const outHeaders = {
       'Content-Type': upRes.headers.get('content-type') || 'video/mp2t',
-      'Cache-Control': 'no-store'
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no'
     };
     const cl = upRes.headers.get('content-length');
     if (cl) outHeaders['Content-Length'] = cl;
@@ -698,7 +811,9 @@ async function handle(req, res) {
     if (cr) outHeaders['Content-Range'] = cr;
     res.writeHead(upRes.status, outHeaders);
     if (!upRes.body) return res.end();
-    return Readable.fromWeb(upRes.body).on('error', () => res.end()).pipe(res);
+    pipeStream = Readable.fromWeb(upRes.body);
+    pipeStream.on('error', () => res.end());
+    return pipeStream.pipe(res);
   }
 
   /* EPG (Jadwal Acara TV XMLTV) */

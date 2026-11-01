@@ -366,7 +366,9 @@ function applyChannels(list) {
   refreshView();
   updateNow();
   var last = LS.get('last', null);
-  if (!S.playing && last) {
+  if (!S.playing && list.length === 1) {
+    play(list[0]);
+  } else if (!S.playing && last) {
     var ch = list.filter(function (c) { return c.url === last; })[0];
     if (ch) cue(ch);
   }
@@ -680,7 +682,7 @@ function loadLib(name) {
   return libPromises[name];
 }
 
-var E = { token: 0, retries: 0, mode: null, hls: null, dash: null, ts: null, stall: null, nativeFallback: false };
+var E = { token: 0, retries: 0, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false };
 
 function destroyEngine() {
   clearTimeout(E.stall);
@@ -693,11 +695,12 @@ function destroyEngine() {
 }
 
 function kindOf(url) {
-  var u = url.split(/[?#]/)[0].toLowerCase();
-  if (/\.m3u8$/.test(u) || u.indexOf('.m3u8') >= 0) return 'hls';
-  if (/\.mpd$/.test(u)) return 'dash';
-  if (/\.flv$/.test(u)) return 'flv';
-  if (/\.ts$/.test(u)) return 'mpegts';
+  var full = String(url || '').toLowerCase();
+  var u = full.split(/[?#]/)[0];
+  if (/\.m3u8$/.test(u) || full.indexOf('.m3u8') >= 0 || /[?&](extension|output|type|format)=(m3u8|hls)\b/.test(full)) return 'hls';
+  if (/\.mpd$/.test(u) || /[?&](extension|output|format)=mpd\b/.test(full)) return 'dash';
+  if (/\.flv$/.test(u) || /[?&](extension|output|format)=flv\b/.test(full)) return 'flv';
+  if (/\.ts$/.test(u) || /[?&](extension|output|type|format)=(ts|mpegts)\b/.test(full) || /\/play\/live\.php\b/.test(full) || /\/live\/play\//.test(full)) return 'mpegts';
   if (/\.(mp4|m4v|webm|ogv|mov|mp3|aac|m4a|ogg|opus)$/.test(u)) return 'native';
   if (/^(rtmp|rtsp|udp):/i.test(url)) return 'unsupported';
   return 'hls'; // kebanyakan stream IPTV tanpa ekstensi adalah HLS
@@ -725,6 +728,21 @@ function startHls(url, token) {
     hls.on(Hls.Events.ERROR, function (_, d) {
       if (!d.fatal || token !== E.token) return;
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) { recovered = true; hls.recoverMediaError(); return; }
+      if (d.details === 'manifestParsingError' && !E.tsFallback && (window.MediaSource || window.ManagedMediaSource)) {
+        // bukan manifest HLS → coba sebagai stream MPEG-TS (mpegts.js)
+        E.tsFallback = true;
+        try { hls.destroy(); } catch (e) {}
+        E.hls = null;
+        startTs(url, 'mpegts', token).then(function () {
+          if (token === E.token) el.video.play().catch(function () {});
+        }).catch(function () {
+          if (token !== E.token) return;
+          E.nativeFallback = true;
+          startNative(url);
+          el.video.play().catch(function () {});
+        });
+        return;
+      }
       if (d.details === 'manifestParsingError' && !E.nativeFallback) {
         // bukan HLS → coba diputar langsung oleh browser
         E.nativeFallback = true;
@@ -765,8 +783,8 @@ function startTs(url, type, token) {
   return loadLib('mpegts').then(function () {
     if (token !== E.token) return;
     if (!mpegts.isSupported()) throw { kind: 'unsupported' };
-    var p = mpegts.createPlayer({ type: type, isLive: true, url: url },
-      { enableStashBuffer: false, liveBufferLatencyChasing: true, lazyLoad: false });
+    var p = mpegts.createPlayer({ type: type, isLive: true, url: url, cors: true },
+      { enableWorker: true, enableStashBuffer: true, stashInitialSize: 64 * 1024, liveBufferLatencyChasing: true, lazyLoad: false, autoCleanupSourceBuffer: true });
     E.ts = p; E.mode = 'mpegts';
     p.on(mpegts.Events.ERROR, function (type2, detail, info) {
       if (token !== E.token) return;
@@ -795,6 +813,7 @@ function play(ch, opts) {
   opts = opts || {};
   var token = ++E.token;
   if (!opts.retry) E.retries = 0;
+  E.tsFallback = false;
   E.nativeFallback = false;
   S.playing = ch; S.cued = null;
   LS.set('last', ch.url);
@@ -806,7 +825,9 @@ function play(ch, opts) {
   destroyEngine();
 
   var kind = kindOf(ch.url);
-  var useProxy = !!(opts.viaProxy || ch.needsHeaders) && kind !== 'unsupported' && kind !== 'dash';
+  var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
+  var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(ch.url);
+  var useProxy = !!(opts.viaProxy || ch.needsHeaders || isHttpOnHttps || isTsOrStalker) && kind !== 'unsupported' && kind !== 'dash';
   E.viaProxy = useProxy;
   var url = useProxy ? streamProxyUrl(ch.url, ch) : upgradeUrl(ch.url);
   var start;
@@ -835,7 +856,6 @@ function play(ch, opts) {
 
 function lockReason(info) {
   if (info.kind === 'drm') return 'drm';
-  if (info.code === 401 || info.code === 403 || info.code === 451) return 'geo';
   return '';
 }
 

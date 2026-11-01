@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.6.8">
+<link rel="stylesheet" href="style.css?v=1.6.9">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -204,7 +204,7 @@
     <h3>Tambah playlist dari alamat</h3>
     <p class="hint">Server ZanTV yang mengambil playlist ini, lalu semua pengguna bisa memakainya.</p>
     <label>Nama<input id="plName" placeholder="Misalnya: TV Indonesia"></label>
-    <label>Alamat playlist (.m3u / .m3u8)<input id="plUrl" type="url" placeholder="https://contoh.com/playlist.m3u" inputmode="url"></label>
+    <label>Alamat playlist (.m3u / .m3u8 atau link stream langsung)<input id="plUrl" type="url" placeholder="https://contoh.com/playlist.m3u atau http://.../play/live.php?..." inputmode="url"></label>
     <label>Header Referer (opsional, otomatis di-relay server)<input id="plRef" type="url" placeholder="Misalnya: https://domain-asal.com/" inputmode="url"></label>
     <label>Header User-Agent (opsional)<input id="plUa" placeholder="Kosongkan untuk pakai bawaan playlist / Chrome"></label>
     <button class="btn" id="plAddUrl">Tambah dan buka</button>
@@ -397,8 +397,8 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.6.8"></script>
-<script src="zan-sports.js?v=1.6.8"></script>
-<script src="app.js?v=1.6.8"></script>
+<script src="zan-sig.js?v=1.6.9"></script>
+<script src="zan-sports.js?v=1.6.9"></script>
+<script src="app.js?v=1.6.9"></script>
 </body>
 </html>
