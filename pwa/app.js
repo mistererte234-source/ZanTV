@@ -654,15 +654,23 @@ setInterval(function () {
   if (ME && EPG.meta) { updateNow(); }
 }, 30000);
 
-var BAD_LOGO_DOMAINS = new Set();
+var BAD_LOGO_DOMAINS = new Set([
+  'picon.tivi-ott.net',
+  'picon.tivi-ott.net:25461',
+  'tivi-ott.net'
+]);
 
 function sanitizeLogoUrl(raw) {
   if (!raw || typeof raw !== 'string') return '';
   var u = raw.trim();
   if (!/^https?:\/\//i.test(u)) return '';
   try {
-    var host = new URL(u).hostname.toLowerCase();
-    if (BAD_LOGO_DOMAINS.has(host)) return '';
+    var parsed = new URL(u);
+    var host = parsed.hostname.toLowerCase();
+    var hostWithPort = parsed.host.toLowerCase();
+    if (BAD_LOGO_DOMAINS.has(host) || BAD_LOGO_DOMAINS.has(hostWithPort)) return '';
+    // Server IPTV seringkali pasang port non-standar (misal :25461) tanpa sertifikat SSL yang valid -> langsung cegah agar tidak membebani browser
+    if (parsed.port && parsed.port !== '80' && parsed.port !== '443') return '';
   } catch (e) {
     return '';
   }
