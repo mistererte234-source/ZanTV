@@ -654,6 +654,21 @@ setInterval(function () {
   if (ME && EPG.meta) { updateNow(); }
 }, 30000);
 
+var BAD_LOGO_DOMAINS = new Set();
+
+function sanitizeLogoUrl(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  var u = raw.trim();
+  if (!/^https?:\/\//i.test(u)) return '';
+  try {
+    var host = new URL(u).hostname.toLowerCase();
+    if (BAD_LOGO_DOMAINS.has(host)) return '';
+  } catch (e) {
+    return '';
+  }
+  return u;
+}
+
 function renderList() {
   var pl = activePlaylist();
   if (!ME) { el.listCount.textContent = ''; el.list.innerHTML = ''; return; }
@@ -694,8 +709,9 @@ function renderList() {
   var html = new Array(S.view.length);
   for (var i = 0; i < S.view.length; i++) {
     var c = S.view[i];
-    var logo = c.logo
-      ? '<img src="' + esc(c.logo) + '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">'
+    var safeLogo = sanitizeLogoUrl(c.logo);
+    var logo = safeLogo
+      ? '<img src="' + esc(safeLogo) + '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" width="40" height="40">'
       : '<b>' + esc(initials(c.name)) + '</b>';
     var en = epgNowNext(c);
     var subHtml = en && en.cur
@@ -718,10 +734,14 @@ function markPlaying() {
   }
 }
 
-/* logo gagal dimuat → inisial */
+/* logo gagal dimuat → inisial & blacklist domain mati */
 el.list.addEventListener('error', function (e) {
   var img = e.target;
   if (img.tagName !== 'IMG') return;
+  try {
+    var badHost = new URL(img.src).hostname.toLowerCase();
+    if (badHost) BAD_LOGO_DOMAINS.add(badHost);
+  } catch (err) {}
   var row = img.closest('.row');
   var c = row ? S.view[+row.dataset.i] : null;
   var b = document.createElement('b');
