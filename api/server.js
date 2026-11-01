@@ -994,13 +994,14 @@ async function handle(req, res) {
     if (lockKey && activeStreamLocks.has(lockKey)) {
       try { activeStreamLocks.get(lockKey).kill(); } catch (e) {}
       activeStreamLocks.delete(lockKey);
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 300));
     }
 
     const VLC_UA = 'VLC/3.0.20 LibVLC/3.0.20';
+    const LAVF_UA = 'Lavf/60.16.100';
     const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     const primaryUa = ua || (isTsLike ? VLC_UA : CHROME_UA);
-    const fallbackUa = ua ? '' : (isTsLike ? CHROME_UA : VLC_UA);
+    const fallbackUa = ua ? '' : (isTsLike ? LAVF_UA : VLC_UA);
 
     let clientClosed = false;
     let currentAc = new AbortController();
@@ -1094,7 +1095,8 @@ async function handle(req, res) {
       const connTimer = setTimeout(() => stepAc.abort(), 20000);
       const reqHeaders = {
         'User-Agent': useUa,
-        'Accept': '*/*'
+        'Accept': '*/*',
+        'Icy-MetaData': '1'
       };
       if (sendClientIp && uIp && !privateIp(uIp)) {
         reqHeaders['X-Forwarded-For'] = uIp;
@@ -1137,16 +1139,26 @@ async function handle(req, res) {
 
     const isRejectedTs = (r) => {
       if (!r) return false;
-      if (r.status === 401 || r.status === 403) return true;
+      if (r.status === 401 || r.status === 403 || r.status === 511 || r.status === 429 || r.status === 458) return true;
       const c = (r.headers.get('content-type') || '').toLowerCase();
       return isTsLike && c.includes('text/html');
     };
 
+    const cachedDirect = activeStreamLocks.get('direct:' + rawU);
     let upRes, target = initialTarget, chosenUa = primaryUa, chosenSendIp = false;
     try {
       let attempt = await connectUpstream(primaryUa, false);
       upRes = attempt.res;
       target = attempt.target;
+      // Jika server Stalker menolak play_token karena sudah pernah ditukar (kode 511/403), coba URL media langsung yang sudah di-cache
+      if (isRejectedTs(upRes) && cachedDirect && cachedDirect.url && (Date.now() - cachedDirect.ts < 3 * 3600 * 1000)) {
+        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        chosenUa = cachedDirect.ua || primaryUa;
+        chosenSendIp = !!cachedDirect.sendIp;
+        attempt = await connectUpstream(chosenUa, chosenSendIp, cachedDirect.url);
+        upRes = attempt.res;
+        target = attempt.target;
+      }
       if (isRejectedTs(upRes) && uIp && !privateIp(uIp)) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
         chosenSendIp = true;
@@ -1162,6 +1174,14 @@ async function handle(req, res) {
         upRes = attempt.res;
         target = attempt.target;
       }
+      if (isRejectedTs(upRes) && isTsLike && chosenUa !== CHROME_UA) {
+        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        chosenUa = CHROME_UA;
+        chosenSendIp = true;
+        attempt = await connectUpstream(CHROME_UA, true);
+        upRes = attempt.res;
+        target = attempt.target;
+      }
     } catch (e) {
       throw fail(502, 'Gagal menghubungi server stream');
     }
@@ -1169,6 +1189,10 @@ async function handle(req, res) {
     if (!upRes.ok && upRes.status !== 206) {
       res.writeHead(upRes.status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify({ error: 'Stream menjawab kode ' + upRes.status }));
+    }
+
+    if (target && target !== initialTarget) {
+      activeStreamLocks.set('direct:' + rawU, { url: target, ua: chosenUa, sendIp: chosenSendIp, ts: Date.now() });
     }
 
     const ct = (upRes.headers.get('content-type') || '').toLowerCase();
@@ -1290,7 +1314,7 @@ async function handle(req, res) {
 
       let curBody = upRes.body;
       let curAc = currentAc;
-      let lastDirectTarget = target !== initialTarget ? target : null;
+      let lastDirectTarget = target !== initialTarget ? target : (cachedDirect && cachedDirect.url ? cachedDirect.url : null);
       let consecutiveDrops = 0;
 
       while (!clientClosed && consecutiveDrops < 6) {
@@ -1299,19 +1323,22 @@ async function handle(req, res) {
         if (sent >= 188 * 20) consecutiveDrops = 0;
         else consecutiveDrops++;
 
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 350));
         if (clientClosed) break;
 
         let reconnected = null;
-        // Coba sambung ulang lewat URL asal dulu (atau URL media langsung jika URL asal menolak re-token)
-        const targetsToTry = lastDirectTarget ? [initialTarget, lastDirectTarget] : [initialTarget];
+        // Utamakan URL media langsung (lastDirectTarget) terlebih dahulu agar play_token sekali-pakai tidak tertolak 511
+        const targetsToTry = lastDirectTarget ? [lastDirectTarget, initialTarget] : [initialTarget];
         for (const tUrl of targetsToTry) {
           if (clientClosed) break;
           try {
             const att = await connectUpstream(chosenUa, chosenSendIp, tUrl);
             if (att.res && att.res.ok && !isRejectedTs(att.res)) {
               reconnected = att;
-              if (att.target && att.target !== initialTarget) lastDirectTarget = att.target;
+              if (att.target && att.target !== initialTarget) {
+                lastDirectTarget = att.target;
+                activeStreamLocks.set('direct:' + rawU, { url: att.target, ua: chosenUa, sendIp: chosenSendIp, ts: Date.now() });
+              }
               break;
             }
             if (att.res && att.res.body) { try { att.res.body.cancel(); } catch (e) {} }

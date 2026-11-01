@@ -1132,6 +1132,7 @@ function explain(info, ch) {
   if (info.kind === 'drm') return { title: 'Channel ini terenkripsi', body: 'Stream ini dilindungi DRM oleh pemilik hak siar, jadi tidak bisa diputar di ZanTV.' };
   if (info.kind === 'lib') return { title: 'Komponen pemutar gagal dimuat', body: 'Periksa koneksi internet lalu coba lagi.' };
   if (info.kind === 'unsupported') return { title: 'Format ini tidak didukung browser', body: 'Alamat seperti rtmp:// atau udp:// tidak bisa diputar di browser. Coba buka di VLC.' };
+  if (info.code === 511) return { title: 'Token sesi stream dikunci server (511)', body: 'Server Stalker/IPTV menolak sambungan ulang karena play_token bersifat sekali-pakai atau batas 1 koneksi aktif per MAC sedang terpakai. Klik Coba lagi.' };
   if (info.code === 401 || info.code === 403 || info.code === 451) return { title: 'Channel dibatasi pemilik siaran', body: 'Server stream menolak akses (kode ' + info.code + '). Jika ini stream Stalker/MAC, pastikan VLC sudah ditutup (maksimal 1 koneksi aktif) atau token tidak dikunci ke IP rumah.' };
   if (info.code === 404 || info.code === 410) return { title: 'Alamat stream sudah tidak aktif', body: 'Server menjawab dengan kode ' + info.code + '. Channel ini kemungkinan sudah mati atau pindah alamat. Coba perbarui playlist.' };
   if (info.code === 502) return { title: 'Server stream menolak koneksi VPS', body: 'Server ZanTV gagal mengambil stream (kode 502). Provider stream kemungkinan mengunci token ke IP internet rumahmu (memblokir IP VPS) atau tautannya sudah kedaluwarsa.' };
@@ -1386,46 +1387,8 @@ function renderQualMenu() {
   }).join('');
 }
 
-function probeServerTranscode(ch, targetH) {
-  if (!ch || ch._noServerTranscode || !ME || ME.hasFfmpeg !== true) return;
-  if (!(window.MediaSource || window.ManagedMediaSource)) return;
-  if (E.probeAc) { try { E.probeAc.abort(); } catch (e) {} E.probeAc = null; }
-  var ac = new AbortController();
-  E.probeAc = ac;
-  var timer = setTimeout(function () { try { ac.abort(); } catch (e) {} }, 4500);
-  var probeUrl = streamProxyUrl(ch.url, ch, targetH);
-
-  fetch(probeUrl, { method: 'GET', credentials: 'same-origin', signal: ac.signal }).then(function (r) {
-    if (!r.ok || !r.body) {
-      ch._noServerTranscode = true;
-      clearTimeout(timer);
-      try { ac.abort(); } catch (e) {}
-      return;
-    }
-    var reader = r.body.getReader();
-    return reader.read().then(function (chunk) {
-      clearTimeout(timer);
-      try { reader.cancel(); } catch (e) {}
-      try { ac.abort(); } catch (e) {}
-      if (!chunk || !chunk.value || chunk.value.byteLength < 188) {
-        ch._noServerTranscode = true;
-        return;
-      }
-      // Pastikan stream yang sedang diputar masih sama dan user masih memilih targetH
-      var curTarget = QUAL.mode === 'saver' ? 480 : (QUAL.mode === 'target' ? QUAL.targetH : 0);
-      if (S.playing === ch && curTarget === targetH && !E.serverTranscode) {
-        play(ch, { viaProxy: true, forceServerQ: targetH });
-      }
-    });
-  }).catch(function () {
-    clearTimeout(timer);
-    ch._noServerTranscode = true;
-  });
-}
-
 function selectQualityOption(qmode, level, sq) {
   if (E.probeAc) { try { E.probeAc.abort(); } catch (e) {} E.probeAc = null; }
-  var wasServerTranscode = E.serverTranscode;
   QUAL.mode = qmode;
   QUAL.level = level;
   QUAL.targetH = sq || 0;
@@ -1439,14 +1402,7 @@ function selectQualityOption(qmode, level, sq) {
     return;
   }
 
-  // Jika sebelumnya sedang dalam mode serverTranscode dan user ganti ke Auto / 1080p, kembalikan ke stream asli
-  if (wasServerTranscode && (qmode === 'auto' || sq >= 1080)) {
-    toast('Kembali ke resolusi asli stream…');
-    play(S.playing, { viaProxy: false, noTranscode: true });
-    return;
-  }
-
-  // Layer 1 & Layer 2: Terapkan langsung di browser tanpa memutus stream!
+  // Terapkan langsung pada player yang sedang berjalan (TANPA membuka koneksi kedua / memutus sesi stream!)
   if (E.hls) {
     applyHlsQuality(E.hls);
   } else if (E.dash) {
@@ -1459,24 +1415,10 @@ function selectQualityOption(qmode, level, sq) {
   renderQualMenu();
 
   var wantedH = qmode === 'saver' ? 480 : (qmode === 'target' ? QUAL.targetH : 0);
-  var realH = QUAL.activeHeight || (el.video && el.video.videoHeight) || 0;
-
   if (qmode === 'auto') {
     toast('Resolusi Otomatis aktif');
-    return;
-  }
-
-  // Jika stream multi-bitrate sudah punya level yang cocok, cukup pakai native ABR switching
-  if (QUAL.levels && QUAL.levels.length > 1) {
+  } else if (QUAL.levels && QUAL.levels.length > 1) {
     toast(qmode === 'saver' ? 'Mode Hemat Data aktif (≤ 480p)' : 'Resolusi diubah ke ' + (wantedH || '') + 'p');
-    return;
-  }
-
-  // Layer 3: Jika stream hanya punya 1 resolusi tinggi (misal 1080p) dan server punya FFmpeg,
-  // cek dulu di background apakah VPS bisa menjangkau stream ini (agar tidak pernah error 502!)
-  if (wantedH > 0 && wantedH <= 720 && (!realH || realH > wantedH) && ME && ME.hasFfmpeg === true && !S.playing._noServerTranscode) {
-    toast('Resolusi ' + wantedH + 'p (Hemat Buffer) aktif · Mengecek kompresi server…');
-    probeServerTranscode(S.playing, wantedH);
   } else {
     toast(qmode === 'saver' ? 'Mode Hemat Data (≤ 480p) aktif' : 'Resolusi ' + wantedH + 'p (Mode Hemat Buffer) aktif');
   }
