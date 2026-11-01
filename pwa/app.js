@@ -812,18 +812,27 @@ function healBufferGap() {
     var b = el.video.buffered;
     if (!b || !b.length) return false;
     var cur = el.video.currentTime;
+
+    // Cek jika posisi playhead tertinggal jauh di belakang live edge (mengurangi delay & buffering siaran TV)
+    var lastEnd = b.end(b.length - 1);
+    if (lastEnd - cur > 12) {
+      el.video.currentTime = lastEnd - 3.5;
+      el.video.play().catch(function () {});
+      return true;
+    }
+
+    // Sambung celah buffer (buffer gap) di antara segmen
     if (b.length > 1) {
       var lastStart = b.start(b.length - 1);
-      var lastEnd = b.end(b.length - 1);
-      if (lastEnd - lastStart > 0.3 && cur < lastStart - 0.1) {
-        el.video.currentTime = lastStart + 0.15;
+      if (lastEnd - lastStart > 0.2 && cur < lastStart - 0.05) {
+        el.video.currentTime = lastStart + 0.1;
         el.video.play().catch(function () {});
         return true;
       }
     }
     for (var i = 0; i < b.length; i++) {
-      if (b.start(i) > cur + 0.25 && b.end(i) - b.start(i) > 0.3) {
-        el.video.currentTime = b.start(i) + 0.15;
+      if (b.start(i) > cur + 0.15 && b.end(i) - b.start(i) > 0.2) {
+        el.video.currentTime = b.start(i) + 0.08;
         el.video.play().catch(function () {});
         return true;
       }
@@ -845,15 +854,26 @@ function startHls(url, token) {
       enableIMSC1: true,
       enableCEA708Captions: true,
       capLevelToPlayerSize: isEco,
-      backBufferLength: isEco ? 6 : 30,
-      maxBufferLength: isEco ? 8 : 30,
-      maxMaxBufferLength: isEco ? 16 : 60,
-      maxBufferHole: 1.5,
-      liveSyncDurationCount: isEco ? 3 : 4,
-      liveMaxLatencyDurationCount: 10,
-      manifestLoadingMaxRetry: 4,
-      levelLoadingMaxRetry: 4,
-      fragLoadingMaxRetry: 6
+      // Turbo Buffer & Zero-Lag Live Sync Engine
+      lowLatencyMode: true,
+      backBufferLength: isEco ? 10 : 25,
+      maxBufferLength: isEco ? 15 : 45,
+      maxMaxBufferLength: isEco ? 30 : 90,
+      maxBufferSize: 60 * 1024 * 1024,
+      maxBufferHole: 0.8,
+      highBufferWatchdogPeriod: 2,
+      nudgeOffset: 0.1,
+      nudgeMaxRetry: 5,
+      maxStarvationDelay: 2.5,
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 7,
+      liveDurationInfinity: true,
+      manifestLoadingMaxRetry: 5,
+      manifestLoadingRetryDelay: 1000,
+      levelLoadingMaxRetry: 5,
+      levelLoadingRetryDelay: 1000,
+      fragLoadingMaxRetry: 8,
+      fragLoadingRetryDelay: 1000
     });
     E.hls = hls; E.mode = 'hls';
     hls.on(Hls.Events.MANIFEST_PARSED, function (_, data) {
@@ -905,7 +925,7 @@ function startHls(url, token) {
     var recovered = 0;
     hls.on(Hls.Events.ERROR, function (_, d) {
       if (!d.fatal || token !== E.token) return;
-      if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recovered < 3) {
+      if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recovered < 4) {
         recovered++;
         if (recovered === 2) hls.swapAudioCodec();
         hls.recoverMediaError();
@@ -987,21 +1007,29 @@ function startTs(url, type, token) {
       {
         enableWorker: false,
         enableStashBuffer: true,
-        stashInitialSize: 512 * 1024,
-        liveBufferLatencyChasing: false,
-        liveSync: false,
-        fixAudioTimestampGap: true,
+        stashInitialSize: 768 * 1024,
+        isLive: true,
         lazyLoad: false,
+        lazyLoadMaxDuration: 0,
+        deferLoadAfterSourceOpen: false,
+        liveBufferLatencyChasing: true,
+        liveBufferLatencyMaxLatency: 3.5,
+        liveBufferLatencyMinRemain: 0.8,
+        liveSync: true,
+        liveSyncMaxLatency: 4.0,
+        liveSyncTargetLatency: 1.5,
+        fixAudioTimestampGap: true,
+        accurateSeek: false,
         autoCleanupSourceBuffer: true,
-        autoCleanupMaxBackwardDuration: 60,
-        autoCleanupMinBackwardDuration: 30
+        autoCleanupMaxBackwardDuration: 45,
+        autoCleanupMinBackwardDuration: 20
       }
     );
     E.ts = p; E.mode = 'mpegts';
     var mediaRecuperated = 0;
     p.on(mpegts.Events.ERROR, function (type2, detail, info) {
       if (token !== E.token) return;
-      if (type2 === mpegts.ErrorTypes.MEDIA_ERROR && mediaRecuperated < 3) {
+      if (type2 === mpegts.ErrorTypes.MEDIA_ERROR && mediaRecuperated < 4) {
         mediaRecuperated++;
         if (healBufferGap()) return;
       }

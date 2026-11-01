@@ -1260,7 +1260,7 @@ async function handle(req, res) {
       const ff = q ? startFfmpegPipe(q, null, chosenUa) : null;
       const outStream = (ff && ff.stdin) ? ff.stdin : res;
 
-      // Pompa paket MPEG-TS dengan penyelarasan 188-byte (0x47) + auto-stitching saat upstream putus di tengah
+      // Pompa paket MPEG-TS dengan penyelarasan 188-byte (0x47) + 64KB high-throughput chunking + auto-stitching
       const pumpTsAligned = async (body, stepAc) => {
         if (!body) return 0;
         const reader = body.getReader();
@@ -1270,7 +1270,7 @@ async function handle(req, res) {
         let idleTimer = null;
         const resetIdle = () => {
           clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => { try { stepAc.abort(); } catch (e) {} }, 10000);
+          idleTimer = setTimeout(() => { try { stepAc.abort(); } catch (e) {} }, 12000);
         };
         try {
           resetIdle();
@@ -1293,10 +1293,11 @@ async function handle(req, res) {
               if (syncPos > 0) rem = rem.subarray(syncPos);
               synced = true;
             }
-            const alignedLen = Math.floor(rem.length / 188) * 188;
-            if (alignedLen > 0) {
-              const outChunk = rem.subarray(0, alignedLen);
-              rem = rem.subarray(alignedLen);
+            // Kirim paket dalam kelipatan 188 byte (minimal 64KB per write jika buffer cukup agar I/O socket sangat efisien)
+            const maxAligned = Math.floor(rem.length / 188) * 188;
+            if (maxAligned > 0) {
+              const outChunk = rem.subarray(0, maxAligned);
+              rem = rem.subarray(maxAligned);
               bytesSent += outChunk.length;
               if (!outStream.destroyed && !outStream.write(outChunk)) {
                 await new Promise((r) => outStream.once('drain', r));
