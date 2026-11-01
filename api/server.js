@@ -17,6 +17,7 @@ const dns = require('dns').promises;
 const net = require('net');
 const readline = require('readline');
 const zlib = require('zlib');
+const { Readable } = require('stream');
 
 const PORT = +(process.env.PORT || 8090);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -562,6 +563,8 @@ async function handle(req, res) {
       const name = b.name != null ? String(b.name).trim().slice(0, 80) : pl.name;
       if (!name) throw fail(400, 'Nama playlist tidak boleh kosong');
       const newUrl = b.url != null ? String(b.url).trim() : '';
+      if (b.referer !== undefined) pl.referer = String(b.referer || '').trim().slice(0, 300);
+      if (b.userAgent !== undefined) pl.userAgent = String(b.userAgent || '').trim().slice(0, 300);
       if (newUrl && newUrl !== pl.source) {
         const text = await fetchM3U(newUrl).catch((e) => { throw fail(502, e.message); });
         const count = countChannels(text);
@@ -572,7 +575,7 @@ async function handle(req, res) {
         upgradePlaylist(pl.id);
         if (!db.epg) { const eu = detectM3UEpgUrl(text); if (eu) autoLoadEpgUrl(eu); }
       } else {
-        pl.name = name; save();
+        pl.name = name; pl.updatedAt = Date.now(); save();
       }
       return send(res, 200, pl);
     }
@@ -587,6 +590,8 @@ async function handle(req, res) {
     needAdmin();
     const b = await readBody(req, MAX_M3U * 2);
     const name = String(b.name || '').trim().slice(0, 80) || 'Playlist ' + (db.playlists.length + 1);
+    const referer = String(b.referer || '').trim().slice(0, 300);
+    const userAgent = String(b.userAgent || '').trim().slice(0, 300);
     let text, kind, source;
     if (b.url) {
       kind = 'url'; source = String(b.url).trim();
@@ -596,12 +601,104 @@ async function handle(req, res) {
     } else throw fail(400, 'Isi alamat playlist atau unggah file');
     const count = countChannels(text);
     if (!count) throw fail(422, 'Isinya bukan playlist M3U atau tidak berisi channel');
-    const pl = { id: crypto.randomBytes(6).toString('hex'), name, kind, source, count, updatedAt: Date.now() };
+    const pl = { id: crypto.randomBytes(6).toString('hex'), name, kind, source, count, referer, userAgent, updatedAt: Date.now() };
     fs.writeFileSync(path.join(PL_DIR, pl.id + '.m3u'), text);
     db.playlists.push(pl); save();
     upgradePlaylist(pl.id);
     if (!db.epg) { const eu = detectM3UEpgUrl(text); if (eu) autoLoadEpgUrl(eu); }
     return send(res, 201, pl);
+  }
+
+  /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U (Referer, Origin, User-Agent) */
+  if (p === '/api/stream' && method === 'GET') {
+    const rawU = url.searchParams.get('u') || '';
+    const ua = (url.searchParams.get('ua') || '').slice(0, 300);
+    const ref = (url.searchParams.get('ref') || '').slice(0, 300);
+    const org = (url.searchParams.get('org') || '').slice(0, 300);
+    let target = await assertPublicUrl(rawU).catch((e) => { throw fail(400, e.message); });
+
+    const reqHeaders = {
+      'User-Agent': ua || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': '*/*'
+    };
+    if (ref) {
+      reqHeaders['Referer'] = ref;
+      try { reqHeaders['Origin'] = org || new URL(ref).origin; } catch (e) {}
+    } else if (org) {
+      reqHeaders['Origin'] = org;
+    }
+    if (req.headers['range']) reqHeaders['Range'] = req.headers['range'];
+
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 25000);
+    req.on('close', () => ac.abort());
+
+    let upRes;
+    try {
+      for (let hop = 0; hop < 4; hop++) {
+        upRes = await fetch(target, { redirect: 'manual', signal: ac.signal, headers: reqHeaders });
+        if (upRes.status >= 300 && upRes.status < 400 && upRes.headers.get('location')) {
+          target = await assertPublicUrl(new URL(upRes.headers.get('location'), target).toString());
+          continue;
+        }
+        break;
+      }
+    } catch (e) {
+      clearTimeout(timer);
+      throw fail(502, 'Gagal menghubungi server stream');
+    }
+    clearTimeout(timer);
+    if (!upRes) throw fail(502, 'Terlalu banyak pengalihan stream');
+    if (!upRes.ok && upRes.status !== 206) {
+      res.writeHead(upRes.status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ error: 'Stream menjawab kode ' + upRes.status }));
+    }
+
+    const ct = (upRes.headers.get('content-type') || '').toLowerCase();
+    const isM3u8 = ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname);
+    const suffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
+      (ref ? '&ref=' + encodeURIComponent(ref) : '') +
+      (org ? '&org=' + encodeURIComponent(org) : '');
+    const wrapUrl = (rel) => {
+      try {
+        const abs = new URL(rel, target).toString();
+        return '/api/stream?u=' + encodeURIComponent(abs) + suffix;
+      } catch (e) { return rel; }
+    };
+
+    if (isM3u8) {
+      const buf = Buffer.from(await upRes.arrayBuffer());
+      const bodyText = buf.toString('utf8');
+      if (bodyText.trimStart().startsWith('#EXTM3U')) {
+        const rewritten = bodyText.split(/\r?\n/).map((line) => {
+          const t = line.trim();
+          if (!t) return line;
+          if (t.startsWith('#')) {
+            return line.replace(/URI="([^"]+)"/gi, (_, u1) => 'URI="' + wrapUrl(u1) + '"');
+          }
+          return wrapUrl(t);
+        }).join('\n');
+        res.writeHead(200, {
+          'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
+          'Cache-Control': 'no-store'
+        });
+        return res.end(rewritten);
+      }
+      res.writeHead(upRes.status, { 'Content-Type': ct || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      return res.end(buf);
+    }
+
+    const outHeaders = {
+      'Content-Type': upRes.headers.get('content-type') || 'video/mp2t',
+      'Cache-Control': 'no-store'
+    };
+    const cl = upRes.headers.get('content-length');
+    if (cl) outHeaders['Content-Length'] = cl;
+    const cr = upRes.headers.get('content-range');
+    if (cr) outHeaders['Content-Range'] = cr;
+    res.writeHead(upRes.status, outHeaders);
+    if (!upRes.body) return res.end();
+    return Readable.fromWeb(upRes.body).on('error', () => res.end()).pipe(res);
   }
 
   /* EPG (Jadwal Acara TV XMLTV) */

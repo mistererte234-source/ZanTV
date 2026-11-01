@@ -64,25 +64,41 @@ var IDB = (function () {
 /* ------------------------------------------------------------------ */
 /* Parser M3U                                                          */
 /* ------------------------------------------------------------------ */
-function parseM3U(text) {
+function parseHeaderPairs(str, cb) {
+  String(str || '').split('&').forEach(function (kv) {
+    var e = kv.indexOf('=');
+    if (e <= 0) return;
+    var key = kv.slice(0, e).trim().toLowerCase(), val = kv.slice(e + 1).trim();
+    try { val = decodeURIComponent(val); } catch (x) {}
+    val = val.replace(/^["']|["']$/g, '');
+    cb(key, val);
+  });
+}
+
+function parseM3U(text, pl) {
   var lines = String(text).replace(/\r/g, '').split('\n');
   var out = [];
-  var attrs = {}, name = null, ua = null, ref = null, drm = false;
+  var defUa = (pl && pl.userAgent) || '';
+  var defRef = (pl && pl.referer) || '';
+  var attrs = {}, name = null, ua = null, ref = null, org = null, drm = false;
   var attrRe = /([\w-]+)="([^"]*)"/g;
 
-  function reset() { attrs = {}; name = null; ua = null; ref = null; drm = false; }
+  function reset() { attrs = {}; name = null; ua = null; ref = null; org = null; drm = false; }
 
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim();
     if (!line) continue;
 
     if (line.indexOf('#EXTINF') === 0) {
-      var keepDrm = drm; // #KODIPROP kadang ditulis sebelum #EXTINF
+      var keepDrm = drm, keepUa = ua, keepRef = ref, keepOrg = org;
       reset();
-      drm = keepDrm;
+      drm = keepDrm; ua = keepUa; ref = keepRef; org = keepOrg;
       var m;
       attrRe.lastIndex = 0;
       while ((m = attrRe.exec(line))) attrs[m[1].toLowerCase()] = m[2];
+      if (attrs['http-user-agent'] || attrs['user-agent']) ua = attrs['http-user-agent'] || attrs['user-agent'];
+      if (attrs['http-referrer'] || attrs['http-referer'] || attrs['referer']) ref = attrs['http-referrer'] || attrs['http-referer'] || attrs['referer'];
+      if (attrs['http-origin'] || attrs['origin']) org = attrs['http-origin'] || attrs['origin'];
       var lastQuote = line.lastIndexOf('"');
       var comma = line.indexOf(',', lastQuote < 0 ? 0 : lastQuote);
       name = comma >= 0 ? line.slice(comma + 1).trim() : null;
@@ -92,28 +108,37 @@ function parseM3U(text) {
         var k = opt.slice(0, eq).trim().toLowerCase(), v = opt.slice(eq + 1).trim();
         if (k === 'http-user-agent') ua = v;
         else if (k === 'http-referrer' || k === 'http-referer') ref = v;
+        else if (k === 'http-origin') org = v;
       }
     } else if (line.indexOf('#EXTGRP:') === 0) {
       if (!attrs['group-title']) attrs['group-title'] = line.slice(8).trim();
     } else if (line.charAt(0) === '#') {
-      // #KODIPROP berisi lisensi DRM: kuncinya tidak dipakai, channel cukup ditandai lalu disembunyikan
-      if (/^#KODIPROP:.*(license_type|license_key|drm)/i.test(line)) drm = true;
+      if (/^#KODIPROP:.*inputstream\.adaptive\.stream_headers=/i.test(line)) {
+        var sh = line.slice(line.indexOf('=') + 1);
+        parseHeaderPairs(sh, function (key, val) {
+          if (key === 'user-agent') ua = val;
+          else if (key === 'referer' || key === 'referrer') ref = val;
+          else if (key === 'origin') org = val;
+        });
+      } else if (/^#KODIPROP:.*(license_type|license_key|drm)/i.test(line)) {
+        drm = true;
+      }
       continue;
     } else {
       var url = line, pipe = url.indexOf('|');
       if (pipe > 0) {
         var extra = url.slice(pipe + 1);
         url = url.slice(0, pipe);
-        extra.split('&').forEach(function (kv) {
-          var e = kv.indexOf('=');
-          if (e <= 0) return;
-          var key = kv.slice(0, e).toLowerCase(), val = kv.slice(e + 1);
-          try { val = decodeURIComponent(val); } catch (x) {}
+        parseHeaderPairs(extra, function (key, val) {
           if (key === 'user-agent') ua = val;
           else if (key === 'referer' || key === 'referrer') ref = val;
+          else if (key === 'origin') org = val;
         });
       }
       if (!/^(https?|rtmp|rtsp|udp|file):|^\/\//i.test(url)) { reset(); continue; }
+      var finalUa = ua || defUa || '';
+      var finalRef = ref || defRef || '';
+      var finalOrg = org || '';
       var group = String(attrs['group-title'] || '').split(';')[0].trim() || 'Lainnya';
       out.push({
         no: out.length + 1,
@@ -122,7 +147,10 @@ function parseM3U(text) {
         logo: attrs['tvg-logo'] || '',
         group: group,
         tvgId: attrs['tvg-id'] || '',
-        needsHeaders: !!(ua || ref),
+        ua: finalUa,
+        ref: finalRef,
+        origin: finalOrg,
+        needsHeaders: !!(finalUa || finalRef || finalOrg),
         drm: drm
       });
       reset();
@@ -356,7 +384,7 @@ function loadPlaylist(pl) {
     });
   }).then(function (text) {
     S.loading = false;
-    applyChannels(parseM3U(text));
+    applyChannels(parseM3U(text, pl));
   }).catch(function (err) {
     S.loading = false;
     if (err.status === 401) return;
@@ -755,6 +783,14 @@ el.video.addEventListener('error', function () {
   fail({ kind: code === 4 ? 'media' : 'network', code: 0 }, E.token);
 });
 
+function streamProxyUrl(rawUrl, ch) {
+  var q = '/api/stream?u=' + encodeURIComponent(rawUrl);
+  if (ch && ch.ua) q += '&ua=' + encodeURIComponent(ch.ua);
+  if (ch && ch.ref) q += '&ref=' + encodeURIComponent(ch.ref);
+  if (ch && ch.origin) q += '&org=' + encodeURIComponent(ch.origin);
+  return q;
+}
+
 function play(ch, opts) {
   opts = opts || {};
   var token = ++E.token;
@@ -770,7 +806,9 @@ function play(ch, opts) {
   destroyEngine();
 
   var kind = kindOf(ch.url);
-  var url = upgradeUrl(ch.url);
+  var useProxy = !!(opts.viaProxy || ch.needsHeaders) && kind !== 'unsupported' && kind !== 'dash';
+  E.viaProxy = useProxy;
+  var url = useProxy ? streamProxyUrl(ch.url, ch) : upgradeUrl(ch.url);
   var start;
   if (kind === 'unsupported') start = Promise.reject({ kind: 'unsupported' });
   else if (kind === 'hls') start = startHls(url, token);
@@ -803,6 +841,11 @@ function lockReason(info) {
 
 function fail(info, token) {
   if (token !== E.token) return;
+  if (!E.viaProxy && S.playing && info.kind !== 'drm' && info.kind !== 'unsupported' && info.kind !== 'lib' && kindOf(S.playing.url) !== 'dash') {
+    el.nowMeta.textContent = 'Mencoba memutar lewat jalur relay server…';
+    play(S.playing, { retry: true, viaProxy: true });
+    return;
+  }
   var lock = lockReason(info);
   var hopeless = !!lock || info.kind === 'unsupported' || info.kind === 'lib' ||
     info.code === 404 || info.code === 410;
@@ -810,7 +853,7 @@ function fail(info, token) {
     E.retries++;
     var ch = S.playing;
     el.nowMeta.textContent = 'Sinyal terputus, mencoba lagi (' + E.retries + ' dari 2)…';
-    setTimeout(function () { if (token === E.token) play(ch, { retry: true }); }, 1500 * E.retries);
+    setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy }); }, 1500 * E.retries);
     return;
   }
   destroyEngine();
@@ -1352,10 +1395,11 @@ function renderPlaylistDialog() {
   }
   el.plList.innerHTML = S.playlists.map(function (p) {
     var meta = p.count + ' channel, ' + (p.kind === 'file' ? 'dari file ' + p.source : p.source);
+    if (p.referer) meta += ' · Referer: ' + p.referer;
     if (p.httpsChecked) meta += (p.httpLeft ? ' · ' + p.httpLeft + ' alamat masih http' : ' · semua https');
     else if (p.httpsChecked === 0 || p.httpsChecked === undefined) meta += ' · sedang dicek https…';
     var tools = isAdmin()
-      ? '<button class="ic" data-edit="' + esc(p.id) + '" aria-label="Ubah ' + esc(p.name) + '" title="Ubah nama atau alamat">' + ICON_EDIT + '</button>' +
+      ? '<button class="ic" data-edit="' + esc(p.id) + '" aria-label="Ubah ' + esc(p.name) + '" title="Ubah nama, alamat, atau header">' + ICON_EDIT + '</button>' +
         (p.kind === 'url' ? '<button class="ic" data-refresh="' + esc(p.id) + '" aria-label="Perbarui ' + esc(p.name) + '" title="Ambil ulang dari alamatnya">' + ICON_REFRESH + '</button>' : '') +
         '<button class="ic" data-del="' + esc(p.id) + '" aria-label="Hapus playlist ' + esc(p.name) + '" title="Hapus">' + ICON_DEL + '</button>'
       : '';
@@ -1371,7 +1415,9 @@ function openEdit(id, li) {
     '<label>Nama<input name="name" value="' + esc(p.name) + '" maxlength="80" required></label>' +
     '<label>Alamat playlist' + (p.kind === 'file' ? ' (kosongkan kalau tetap dari file)' : '') +
     '<input name="url" type="url" inputmode="url" placeholder="https://contoh.com/playlist.m3u" value="' + esc(p.kind === 'url' ? p.source : '') + '"></label>' +
-    '<p class="hint">Kalau alamatnya diganti, server mengambil ulang isi playlist dari alamat baru.</p>' +
+    '<label>Header Referer (opsional)<input name="referer" type="url" inputmode="url" placeholder="https://domain-asal.com/" value="' + esc(p.referer || '') + '"></label>' +
+    '<label>Header User-Agent (opsional)<input name="userAgent" placeholder="Kosongkan untuk bawaan" value="' + esc(p.userAgent || '') + '"></label>' +
+    '<p class="hint">Jika Referer/User-Agent diisi (atau ada #EXTVLCOPT di M3U), stream otomatis di-relay oleh server ZanTV dengan header tersebut.</p>' +
     '<div class="pl-edit-actions"><button class="btn primary" type="submit">Simpan</button><button class="btn ghost" type="button" data-cancel>Batal</button></div></form>';
   var form = li.querySelector('form');
   form.elements.name.focus();
@@ -1380,9 +1426,11 @@ function openEdit(id, li) {
     ev.preventDefault();
     var name = form.elements.name.value.trim();
     var url = form.elements.url.value.trim();
+    var referer = form.elements.referer.value.trim();
+    var userAgent = form.elements.userAgent.value.trim();
     if (!name) { toast('Nama playlist tidak boleh kosong'); return; }
     if (url && !/^https?:\/\//i.test(url)) { toast('Alamat harus diawali http:// atau https://'); return; }
-    var body = { name: name };
+    var body = { name: name, referer: referer, userAgent: userAgent };
     if (url && url !== p.source) body.url = url;
     var btn = form.querySelector('[type=submit]');
     btn.disabled = true;
@@ -1391,8 +1439,8 @@ function openEdit(id, li) {
       S.playlists = S.playlists.map(function (x) { return x.id === np.id ? np : x; });
       renderPlaylistDialog();
       setPlaylistLabel();
-      toast(body.url ? 'Disimpan: ' + np.count + ' channel dari alamat baru' : 'Nama playlist disimpan');
-      if (body.url && np.id === S.activeId) loadPlaylist(np);
+      toast(body.url ? 'Disimpan: ' + np.count + ' channel dari alamat baru' : 'Pengaturan playlist disimpan');
+      if (np.id === S.activeId) loadPlaylist(np);
       if (body.url) setTimeout(fetchEPG, 2000);
     }).catch(function (err) { btn.disabled = false; toast(err.message); });
   });
@@ -1423,8 +1471,12 @@ $('#plAddUrl').addEventListener('click', function () {
   var url = $('#plUrl').value.trim();
   if (!/^https?:\/\//i.test(url)) { toast('Masukkan alamat yang diawali http:// atau https://'); $('#plUrl').focus(); return; }
   var name = $('#plName').value.trim();
+  var referer = ($('#plRef') && $('#plRef').value.trim()) || '';
+  var userAgent = ($('#plUa') && $('#plUa').value.trim()) || '';
   $('#plUrl').value = ''; $('#plName').value = '';
-  adminAdd({ name: name, url: url }).then(function () { setTimeout(fetchEPG, 2500); });
+  if ($('#plRef')) $('#plRef').value = '';
+  if ($('#plUa')) $('#plUa').value = '';
+  adminAdd({ name: name, url: url, referer: referer, userAgent: userAgent }).then(function () { setTimeout(fetchEPG, 2500); });
 });
 $('#plFile').addEventListener('change', function (e) {
   var f = e.target.files && e.target.files[0];
@@ -1432,8 +1484,12 @@ $('#plFile').addEventListener('change', function (e) {
   f.text().then(function (text) {
     if (!parseM3U(text).length) { toast('File ini tidak berisi channel M3U'); return; }
     var name = $('#plName').value.trim() || f.name.replace(/\.(m3u8?|txt)$/i, '');
+    var referer = ($('#plRef') && $('#plRef').value.trim()) || '';
+    var userAgent = ($('#plUa') && $('#plUa').value.trim()) || '';
     $('#plName').value = '';
-    adminAdd({ name: name, filename: f.name, text: text }).then(function () { setTimeout(fetchEPG, 2500); });
+    if ($('#plRef')) $('#plRef').value = '';
+    if ($('#plUa')) $('#plUa').value = '';
+    adminAdd({ name: name, filename: f.name, text: text, referer: referer, userAgent: userAgent }).then(function () { setTimeout(fetchEPG, 2500); });
   });
   e.target.value = '';
 });
