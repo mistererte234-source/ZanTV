@@ -67,17 +67,19 @@ var IDB = (function () {
 function parseM3U(text) {
   var lines = String(text).replace(/\r/g, '').split('\n');
   var out = [];
-  var attrs = {}, name = null, ua = null, ref = null;
+  var attrs = {}, name = null, ua = null, ref = null, drm = false;
   var attrRe = /([\w-]+)="([^"]*)"/g;
 
-  function reset() { attrs = {}; name = null; ua = null; ref = null; }
+  function reset() { attrs = {}; name = null; ua = null; ref = null; drm = false; }
 
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim();
     if (!line) continue;
 
     if (line.indexOf('#EXTINF') === 0) {
+      var keepDrm = drm; // #KODIPROP kadang ditulis sebelum #EXTINF
       reset();
+      drm = keepDrm;
       var m;
       attrRe.lastIndex = 0;
       while ((m = attrRe.exec(line))) attrs[m[1].toLowerCase()] = m[2];
@@ -94,7 +96,9 @@ function parseM3U(text) {
     } else if (line.indexOf('#EXTGRP:') === 0) {
       if (!attrs['group-title']) attrs['group-title'] = line.slice(8).trim();
     } else if (line.charAt(0) === '#') {
-      continue; // termasuk #KODIPROP (kunci DRM) yang sengaja diabaikan
+      // #KODIPROP berisi lisensi DRM: kuncinya tidak dipakai, channel cukup ditandai lalu disembunyikan
+      if (/^#KODIPROP:.*(license_type|license_key|drm)/i.test(line)) drm = true;
+      continue;
     } else {
       var url = line, pipe = url.indexOf('|');
       if (pipe > 0) {
@@ -118,7 +122,8 @@ function parseM3U(text) {
         logo: attrs['tvg-logo'] || '',
         group: group,
         tvgId: attrs['tvg-id'] || '',
-        needsHeaders: !!(ua || ref)
+        needsHeaders: !!(ua || ref),
+        drm: drm
       });
       reset();
     }
@@ -266,7 +271,61 @@ function activePlaylist() {
   return null;
 }
 
+/* ---------- channel terkunci (DRM / geo-lock): sekali ditandai langsung hilang dari daftar ---------- */
+var BLOCKED = LS.get('blocked', {}); // { url: 'drm' | 'geo' }
+S.raw = [];
+S.hidden = 0;
+
+function isBlocked(c) { return !!c.drm || !!BLOCKED[c.url]; }
+
+function filterBlocked(list) {
+  var out = [];
+  for (var i = 0; i < list.length; i++) if (!isBlocked(list[i])) out.push(list[i]);
+  for (var j = 0; j < out.length; j++) out[j].no = j + 1; // nomor channel tetap urut tanpa bolong
+  S.hidden = list.length - out.length;
+  return out;
+}
+
+var PENDING = {}; // laporan yang belum dikonfirmasi server
+
+function syncBlocked() {
+  return api('GET', '/api/blocked').then(function (rows) {
+    var next = {};
+    (rows || []).forEach(function (r) { if (r && r.url) next[r.url] = r.reason || 'geo'; });
+    Object.keys(PENDING).forEach(function (u) { next[u] = PENDING[u]; });
+    var changed = JSON.stringify(next) !== JSON.stringify(BLOCKED);
+    BLOCKED = next; LS.set('blocked', BLOCKED);
+    if (changed && S.raw.length) applyChannels(S.raw);
+  }).catch(function () {});
+}
+setInterval(function () { if (ME) syncBlocked(); }, 5 * 60 * 1000);
+
+function blockChannel(ch, reason) {
+  if (!ch || BLOCKED[ch.url]) return;
+  BLOCKED[ch.url] = reason; LS.set('blocked', BLOCKED);
+  PENDING[ch.url] = reason;
+  api('POST', '/api/blocked', { url: ch.url, reason: reason, name: ch.name })
+    .then(function () { delete PENDING[ch.url]; }).catch(function () {});
+  // ingat posisinya supaya tombol "channel berikutnya" lanjut ke tetangganya, bukan balik ke awal
+  var pool = S.view.length ? S.view : S.channels;
+  S.gap = { url: ch.url, idx: pool.indexOf(ch) };
+  S.channels = filterBlocked(S.raw);
+  refreshView();
+  toast(ch.name + ' disembunyikan (' + (reason === 'drm' ? 'terkunci DRM' : 'dibatasi wilayah') + ')');
+}
+
+function restoreBlocked() {
+  return api('DELETE', '/api/blocked').then(function (r) {
+    BLOCKED = {}; LS.set('blocked', BLOCKED);
+    if (S.raw.length) applyChannels(S.raw);
+    renderPlaylistDialog();
+    toast((r && r.restored ? r.restored : 'Semua') + ' channel ditampilkan lagi');
+  }).catch(function (e) { toast(e.message); });
+}
+
 function applyChannels(list) {
+  S.raw = list;
+  list = filterBlocked(list);
   S.channels = list;
   if (S.playing) {
     var same = list.filter(function (c) { return c.url === S.playing.url; })[0];
@@ -314,7 +373,7 @@ function setPlaylistLabel() {
 function activate(id) {
   S.activeId = id;
   LS.set('active', id);
-  S.channels = []; S.view = []; S.group = 'all';
+  S.channels = []; S.raw = []; S.hidden = 0; S.view = []; S.group = 'all';
   setPlaylistLabel();
   renderGroups(); renderList(); updateNow();
   var pl = activePlaylist();
@@ -440,7 +499,8 @@ function renderList() {
     el.list.innerHTML = '';
     return;
   }
-  el.listCount.textContent = S.view.length + ' channel' + (S.query ? ' cocok dengan "' + S.query + '"' : '');
+  el.listCount.textContent = S.view.length + ' channel' + (S.query ? ' cocok dengan "' + S.query + '"' : '') +
+    (S.hidden && !S.query ? ' · ' + S.hidden + ' terkunci disembunyikan' : '');
   if (!S.view.length) {
     var t = S.group === 'fav' ? 'Belum ada favorit. Tekan bintang saat menonton untuk menyimpan channel di sini.'
       : S.group === 'recent' ? 'Channel yang kamu tonton akan muncul di sini.'
@@ -648,10 +708,17 @@ function play(ch, opts) {
   });
 }
 
+function lockReason(info) {
+  if (info.kind === 'drm') return 'drm';
+  if (info.code === 401 || info.code === 403 || info.code === 451) return 'geo';
+  return '';
+}
+
 function fail(info, token) {
   if (token !== E.token) return;
-  var hopeless = info.kind === 'drm' || info.kind === 'unsupported' || info.kind === 'lib' ||
-    info.code === 401 || info.code === 403 || info.code === 404 || info.code === 410;
+  var lock = lockReason(info);
+  var hopeless = !!lock || info.kind === 'unsupported' || info.kind === 'lib' ||
+    info.code === 404 || info.code === 410;
   if (!hopeless && E.retries < 2) {
     E.retries++;
     var ch = S.playing;
@@ -664,19 +731,20 @@ function fail(info, token) {
   el.liveTag.hidden = true;
   var x = explain(info, S.playing);
   el.msgTitle.textContent = x.title;
-  el.msgBody.textContent = x.body;
+  el.msgBody.textContent = x.body + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '');
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   el.nowMeta.textContent = x.title;
   if (S.playing) track('play_error', { channel: S.playing.name, reason: x.title });
+  if (lock && S.playing) blockChannel(S.playing, lock);
 }
 
 function explain(info, ch) {
   var mixed = location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
-  if (info.kind === 'drm') return { title: 'Channel ini terenkripsi', body: 'Stream ini dilindungi DRM, jadi tidak bisa diputar di ZanTV.' };
+  if (info.kind === 'drm') return { title: 'Channel ini terenkripsi', body: 'Stream ini dilindungi DRM oleh pemilik hak siar, jadi tidak bisa diputar di ZanTV.' };
   if (info.kind === 'lib') return { title: 'Komponen pemutar gagal dimuat', body: 'Periksa koneksi internet lalu coba lagi.' };
   if (info.kind === 'unsupported') return { title: 'Format ini tidak didukung browser', body: 'Alamat seperti rtmp:// atau udp:// tidak bisa diputar di browser. Coba buka di VLC.' };
-  if (info.code === 401 || info.code === 403) return { title: 'Server menolak akses', body: 'Server stream menjawab dengan kode ' + info.code + '. Biasanya karena dibatasi wilayah, butuh langganan, atau tautannya sudah kedaluwarsa.' };
+  if (info.code === 401 || info.code === 403 || info.code === 451) return { title: 'Channel dibatasi pemilik siaran', body: 'Server stream menolak akses (kode ' + info.code + '). Biasanya karena dibatasi wilayah, butuh langganan, atau tautannya sudah kedaluwarsa.' };
   if (info.code === 404 || info.code === 410) return { title: 'Alamat stream sudah tidak aktif', body: 'Server menjawab dengan kode ' + info.code + '. Channel ini kemungkinan sudah mati atau pindah alamat. Coba perbarui playlist.' };
   if (mixed) return { title: 'Stream http diblokir browser', body: 'ZanTV dibuka lewat https, sedangkan alamat stream ini masih http dan servernya tidak menyediakan versi https. Browser memblokir campuran ini demi keamanan. Buka di VLC, atau jalankan ZanTV dari http://localhost.' };
   if (ch.needsHeaders) return { title: 'Channel ini butuh pengaturan khusus', body: 'Playlist meminta User-Agent atau Referer tertentu, dan halaman web tidak diizinkan mengaturnya. Channel seperti ini biasanya hanya jalan di VLC atau aplikasi IPTV.' };
@@ -755,7 +823,13 @@ function zap(dir) {
   var cur = S.playing || S.cued;
   var idx = cur ? list.indexOf(cur) : -1;
   if (idx < 0 && cur) idx = list.findIndex(function (c) { return c.url === cur.url; });
-  var next = idx < 0 ? (dir > 0 ? 0 : list.length - 1) : (idx + dir + list.length) % list.length;
+  var next;
+  if (idx < 0 && cur && S.gap && S.gap.url === cur.url && S.gap.idx >= 0) {
+    // channel yang sedang dibuka barusan disembunyikan: maju = channel yang kini menempati posisinya
+    next = dir > 0 ? S.gap.idx % list.length : (S.gap.idx - 1 + list.length) % list.length;
+  } else {
+    next = idx < 0 ? (dir > 0 ? 0 : list.length - 1) : (idx + dir + list.length) % list.length;
+  }
   play(list[next]);
   focusRowFor(list[next], false);
 }
@@ -1112,6 +1186,9 @@ el.idle.addEventListener('click', function () { if (S.cued) play(S.cued); });
 
 $('#refreshBtn').addEventListener('click', function () { fetchPlaylists(false); });
 $('#plRefresh').addEventListener('click', function () { el.dialog.close(); fetchPlaylists(false); });
+$('#plUnblock').addEventListener('click', function () {
+  if (confirm('Tampilkan lagi semua channel yang ditandai DRM/geo-lock untuk semua pengguna? Channel yang memang terkunci akan otomatis tersembunyi lagi begitu dibuka.')) restoreBlocked();
+});
 $('#playlistBtn').addEventListener('click', openDialog);
 $('#acctBtn').addEventListener('click', openAccount);
 
@@ -1124,6 +1201,12 @@ var ICON_REFRESH = '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/
 
 function renderPlaylistDialog() {
   $('#plAdmin').hidden = !isAdmin();
+  var nBlocked = Object.keys(BLOCKED).length;
+  var ub = $('#plUnblock');
+  if (ub) {
+    ub.hidden = !isAdmin() || !nBlocked;
+    ub.textContent = 'Tampilkan lagi ' + nBlocked + ' channel terkunci';
+  }
   if (!S.playlists.length) {
     el.plList.innerHTML = '<li class="hint" style="padding:4px 10px 0">Belum ada playlist.</li>';
     return;
@@ -1367,7 +1450,7 @@ function onLoggedOut() {
   $('#locBanner').hidden = true;
   E.token++;
   destroyEngine();
-  S.playing = null; S.cued = null; S.channels = []; S.view = []; S.playlists = [];
+  S.playing = null; S.cued = null; S.channels = []; S.raw = []; S.hidden = 0; S.view = []; S.playlists = [];
   el.idle.hidden = false; hideMsg(); setBusy(false);
   el.stage.classList.remove('is-playing');
   if (el.dialog.open) el.dialog.close();
@@ -1385,6 +1468,7 @@ function onLoggedIn(user) {
   document.body.classList.toggle('is-admin', isAdmin());
   $('#acctLabel').textContent = user.name;
   S.activeId = LS.get('active', null);
+  syncBlocked();
   fetchPlaylists(true);
   sendPresence();
   setTimeout(askLocation, 1200);

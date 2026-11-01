@@ -29,13 +29,13 @@ const COOKIE = 'zantv_sid';
 
 /* ---------------- penyimpanan ---------------- */
 fs.mkdirSync(PL_DIR, { recursive: true, mode: 0o700 });
-let db = { users: {}, sessions: {}, playlists: [] };
+let db = { users: {}, sessions: {}, playlists: [], blocked: {} };
 let dbMtime = 0;
 function load() {
   try {
     const st = fs.statSync(DB_FILE);
     if (st.mtimeMs === dbMtime) return;
-    db = Object.assign({ users: {}, sessions: {}, playlists: [] }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+    db = Object.assign({ users: {}, sessions: {}, playlists: [], blocked: {} }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
     dbMtime = st.mtimeMs;
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
 }
@@ -407,6 +407,32 @@ async function handle(req, res) {
     db.playlists.push(pl); save();
     upgradePlaylist(pl.id);
     return send(res, 201, pl);
+  }
+
+  /* channel terkunci (DRM / dibatasi wilayah): disembunyikan untuk semua pengguna */
+  if (p === '/api/blocked' && method === 'GET') {
+    return send(res, 200, Object.keys(db.blocked || {}).map((u) => Object.assign({ url: u }, db.blocked[u])));
+  }
+  if (p === '/api/blocked' && method === 'POST') {
+    const b = await readBody(req, 8192);
+    const u = String(b.url || '').trim();
+    const reason = b.reason === 'drm' ? 'drm' : b.reason === 'geo' ? 'geo' : '';
+    if (!u || u.length > 2048 || !/^(https?|rtmp|rtsp|udp):/i.test(u)) throw fail(400, 'Alamat channel tidak valid');
+    if (!reason) throw fail(400, 'Alasan tidak dikenal');
+    db.blocked = db.blocked || {};
+    if (!db.blocked[u]) {
+      const keys = Object.keys(db.blocked);
+      if (keys.length >= 5000) delete db.blocked[keys.sort((a, c) => db.blocked[a].at - db.blocked[c].at)[0]];
+      db.blocked[u] = { reason, name: clip(b.name, 120), at: Date.now(), by: me.name };
+      save();
+    }
+    return send(res, 204);
+  }
+  if (p === '/api/blocked' && method === 'DELETE') {
+    needAdmin();
+    const n = Object.keys(db.blocked || {}).length;
+    db.blocked = {}; save();
+    return send(res, 200, { ok: true, restored: n });
   }
 
   /* aktivitas: dikirim aplikasi (tontonan, error, lokasi yang disetujui pengguna) */

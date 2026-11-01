@@ -730,7 +730,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 /* ---------- v1.4: pesan error tidak menumpuk kontrol ---------- */
 .stage.has-msg .controls { display: none; }
-.pl-tools { padding: 4px 22px 0; }
+.pl-tools { padding: 4px 22px 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.pl-tools .btn[hidden] { display: none; }
 .pl-tools .btn { height: 36px; font-size: 13.5px; }
 
 /* ---------- v1.4: tampilan HP ---------- */
