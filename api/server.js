@@ -16,6 +16,7 @@ const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
 const readline = require('readline');
+const zlib = require('zlib');
 
 const PORT = +(process.env.PORT || 8090);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -23,19 +24,21 @@ const DATA_DIR = process.env.ZANTV_DATA || '/var/lib/zantv';
 const COOKIE_SECURE = process.env.COOKIE_SECURE !== '0';
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const PL_DIR = path.join(DATA_DIR, 'playlists');
+const EPG_FILE = path.join(DATA_DIR, 'epg.json');
 const SESSION_MS = 30 * 24 * 3600 * 1000;
 const MAX_M3U = 15 * 1024 * 1024;
+const MAX_EPG = 60 * 1024 * 1024;
 const COOKIE = 'zantv_sid';
 
 /* ---------------- penyimpanan ---------------- */
 fs.mkdirSync(PL_DIR, { recursive: true, mode: 0o700 });
-let db = { users: {}, sessions: {}, playlists: [], blocked: {} };
+let db = { users: {}, sessions: {}, playlists: [], blocked: {}, epg: null };
 let dbMtime = 0;
 function load() {
   try {
     const st = fs.statSync(DB_FILE);
     if (st.mtimeMs === dbMtime) return;
-    db = Object.assign({ users: {}, sessions: {}, playlists: [], blocked: {} }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+    db = Object.assign({ users: {}, sessions: {}, playlists: [], blocked: {}, epg: null }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
     dbMtime = st.mtimeMs;
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
 }
@@ -220,6 +223,195 @@ function countChannels(text) {
   return n;
 }
 
+/* ---------------- EPG (XMLTV .xml / .xml.gz) ---------------- */
+function decodeXml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .trim();
+}
+
+function normEpgKey(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\.(id|co\.id|tv|com)$/i, '')
+    .replace(/\b(hd|fhd|uhd|4k|sd|indo|indonesia|tv|channel|ch)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function parseXmltvTime(str) {
+  if (!str) return 0;
+  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?\s*([+-]\d{4})?/.exec(String(str).trim());
+  if (!m) return 0;
+  const y = +m[1], mo = +m[2] - 1, d = +m[3], h = +m[4], mi = +m[5], s = +(m[6] || 0);
+  let utcMs = Date.UTC(y, mo, d, h, mi, s);
+  if (m[7]) {
+    const sign = m[7][0] === '-' ? -1 : 1;
+    const offH = +m[7].slice(1, 3);
+    const offM = +m[7].slice(3, 5);
+    utcMs -= sign * (offH * 3600 + offM * 60) * 1000;
+  }
+  return utcMs;
+}
+
+function unpackBuffer(buf) {
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    const out = zlib.gunzipSync(buf, { maxOutputLength: MAX_EPG });
+    return out.toString('utf8');
+  }
+  return buf.toString('utf8');
+}
+
+async function fetchEPGUrl(u) {
+  let url = await assertPublicUrl(u);
+  for (let hop = 0; hop < 4; hop++) {
+    const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(45000), headers: { 'User-Agent': 'ZanTV/1.6' } });
+    if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
+      url = await assertPublicUrl(new URL(r.headers.get('location'), url).toString());
+      continue;
+    }
+    if (!r.ok) throw new Error('Server EPG menjawab kode ' + r.status);
+    const len = +(r.headers.get('content-length') || 0);
+    if (len > MAX_EPG) throw new Error('File EPG terlalu besar');
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > MAX_EPG) throw new Error('File EPG terlalu besar');
+    return unpackBuffer(buf);
+  }
+  throw new Error('Terlalu banyak pengalihan alamat EPG');
+}
+
+function parseXMLTV(xml) {
+  const aliases = {};
+  const chNames = {};
+  const chRe = /<channel\b[^>]*\bid=["']([^"']+)["'][^>]*>([\s\S]*?)<\/channel>/gi;
+  let cm;
+  while ((cm = chRe.exec(xml))) {
+    const id = decodeXml(cm[1]);
+    const body = cm[2];
+    const idLow = id.toLowerCase();
+    aliases[idLow] = id;
+    const nk = normEpgKey(id);
+    if (nk && !aliases[nk]) aliases[nk] = id;
+    const dnRe = /<display-name\b[^>]*>([\s\S]*?)<\/display-name>/gi;
+    let dm;
+    while ((dm = dnRe.exec(body))) {
+      const dn = decodeXml(dm[1]);
+      if (!dn) continue;
+      if (!chNames[id]) chNames[id] = dn;
+      aliases[dn.toLowerCase()] = id;
+      const dnk = normEpgKey(dn);
+      if (dnk && !aliases[dnk]) aliases[dnk] = id;
+    }
+  }
+
+  const allProgs = {};
+  const now = Date.now();
+  const minTime = now - 6 * 3600 * 1000;
+  const maxTime = now + 36 * 3600 * 1000;
+  const prRe = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/gi;
+  let pm, totalParsed = 0, windowProgs = {};
+
+  while ((pm = prRe.exec(xml))) {
+    const attrs = pm[1], body = pm[2];
+    const chM = /\bchannel=["']([^"']+)["']/i.exec(attrs);
+    const stM = /\bstart=["']([^"']+)["']/i.exec(attrs);
+    const spM = /\bstop=["']([^"']+)["']/i.exec(attrs);
+    if (!chM || !stM) continue;
+    const chId = decodeXml(chM[1]);
+    const start = parseXmltvTime(stM[1]);
+    if (!start) continue;
+    let stop = spM ? parseXmltvTime(spM[1]) : 0;
+    if (!stop || stop <= start) stop = start + 3600 * 1000;
+
+    const tM = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(body);
+    const title = tM ? decodeXml(tM[1]).slice(0, 140) : '';
+    if (!title) continue;
+    const dM = /<desc\b[^>]*>([\s\S]*?)<\/desc>/i.exec(body);
+    const desc = dM ? decodeXml(dM[1]).slice(0, 280) : '';
+    const cM = /<category\b[^>]*>([\s\S]*?)<\/category>/i.exec(body);
+    const cat = cM ? decodeXml(cM[1]).slice(0, 60) : '';
+
+    if (!aliases[chId.toLowerCase()]) {
+      aliases[chId.toLowerCase()] = chId;
+      const nk = normEpgKey(chId);
+      if (nk && !aliases[nk]) aliases[nk] = chId;
+    }
+
+    const item = { start, stop, title };
+    if (desc) item.desc = desc;
+    if (cat) item.cat = cat;
+
+    totalParsed++;
+    if (stop >= minTime && start <= maxTime) {
+      (windowProgs[chId] = windowProgs[chId] || []).push(item);
+    }
+    if (!allProgs[chId] || allProgs[chId].length < 25) {
+      (allProgs[chId] = allProgs[chId] || []).push(item);
+    }
+  }
+
+  const chosen = Object.keys(windowProgs).length ? windowProgs : allProgs;
+  let programmeCount = 0;
+  for (const k of Object.keys(chosen)) {
+    chosen[k].sort((a, b) => a.start - b.start);
+    if (chosen[k].length > 48) chosen[k] = chosen[k].slice(0, 48);
+    programmeCount += chosen[k].length;
+  }
+
+  const channelCount = Object.keys(chosen).length || Object.keys(chNames).length;
+  return { channels: chosen, chNames, aliases, channelCount, programmeCount, totalParsed };
+}
+
+function saveEPG(xml, kind, source) {
+  const parsed = parseXMLTV(xml);
+  if (!parsed.channelCount && !parsed.totalParsed) {
+    throw new Error('File bukan format XMLTV EPG atau tidak berisi jadwal acara');
+  }
+  const meta = {
+    kind,
+    source,
+    updatedAt: Date.now(),
+    channelCount: parsed.channelCount,
+    programmeCount: parsed.programmeCount
+  };
+  const payload = { meta, channels: parsed.channels, chNames: parsed.chNames, aliases: parsed.aliases };
+  fs.writeFileSync(EPG_FILE + '.tmp', JSON.stringify(payload), { mode: 0o600 });
+  fs.renameSync(EPG_FILE + '.tmp', EPG_FILE);
+  db.epg = meta;
+  save();
+  return meta;
+}
+
+function detectM3UEpgUrl(text) {
+  const firstLines = String(text || '').slice(0, 2048);
+  const m = /\b(?:url-tvg|x-tvg-url)=["']([^"']+)["']/i.exec(firstLines);
+  if (!m) return '';
+  const first = m[1].split(',')[0].trim();
+  return /^https?:\/\//i.test(first) ? first : '';
+}
+
+let epgRefreshing = false;
+async function autoLoadEpgUrl(u) {
+  if (!u || epgRefreshing) return;
+  epgRefreshing = true;
+  try {
+    const xml = await fetchEPGUrl(u);
+    saveEPG(xml, 'url', u);
+    console.log('EPG diperbarui otomatis dari', u);
+  } catch (e) {
+    console.error('Gagal muat EPG otomatis:', e.message);
+  } finally {
+    epgRefreshing = false;
+  }
+}
+
 /* ---------------- log aktivitas ---------------- */
 const LOG_FILE = path.join(DATA_DIR, 'activity.jsonl');
 const LOG_DAYS = +(process.env.ZANTV_LOG_DAYS || 90);
@@ -361,6 +553,7 @@ async function handle(req, res) {
       fs.writeFileSync(file, text);
       Object.assign(pl, { count, updatedAt: Date.now(), httpsChecked: 0 }); save();
       upgradePlaylist(pl.id);
+      if (!db.epg) { const eu = detectM3UEpgUrl(text); if (eu) autoLoadEpgUrl(eu); }
       return send(res, 200, pl);
     }
     if (!m[2] && method === 'PATCH') {
@@ -377,6 +570,7 @@ async function handle(req, res) {
         Object.assign(pl, { kind: 'url', source: newUrl, count, updatedAt: Date.now(), httpsChecked: 0, httpUpgraded: 0, httpLeft: 0 });
         pl.name = name; save();
         upgradePlaylist(pl.id);
+        if (!db.epg) { const eu = detectM3UEpgUrl(text); if (eu) autoLoadEpgUrl(eu); }
       } else {
         pl.name = name; save();
       }
@@ -406,7 +600,54 @@ async function handle(req, res) {
     fs.writeFileSync(path.join(PL_DIR, pl.id + '.m3u'), text);
     db.playlists.push(pl); save();
     upgradePlaylist(pl.id);
+    if (!db.epg) { const eu = detectM3UEpgUrl(text); if (eu) autoLoadEpgUrl(eu); }
     return send(res, 201, pl);
+  }
+
+  /* EPG (Jadwal Acara TV XMLTV) */
+  if (p === '/api/epg' && method === 'GET') {
+    if (db.epg && fs.existsSync(EPG_FILE)) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return fs.createReadStream(EPG_FILE).on('error', () => res.end()).pipe(res);
+    }
+    return send(res, 200, { meta: null, channels: {}, chNames: {}, aliases: {} });
+  }
+  if (p === '/api/epg' && method === 'POST') {
+    needAdmin();
+    const b = await readBody(req, MAX_EPG);
+    let xml, kind, source;
+    if (b.url) {
+      kind = 'url';
+      source = String(b.url).trim();
+      xml = await fetchEPGUrl(source).catch((e) => { throw fail(502, e.message); });
+    } else if (typeof b.base64 === 'string') {
+      kind = 'file';
+      source = String(b.filename || 'epg.xml').slice(0, 120);
+      try { xml = unpackBuffer(Buffer.from(b.base64, 'base64')); } catch (e) { throw fail(400, 'File EPG gagal dibaca: ' + e.message); }
+    } else if (typeof b.text === 'string') {
+      kind = 'file';
+      source = String(b.filename || 'epg.xml').slice(0, 120);
+      xml = b.text;
+    } else {
+      throw fail(400, 'Isi alamat EPG (.xml / .xml.gz) atau unggah file');
+    }
+    let meta;
+    try { meta = saveEPG(xml, kind, source); } catch (e) { throw fail(422, e.message); }
+    return send(res, 200, meta);
+  }
+  if (p === '/api/epg/refresh' && method === 'POST') {
+    needAdmin();
+    if (!db.epg || db.epg.kind !== 'url') throw fail(400, 'EPG dari file tidak bisa diperbarui otomatis. Unggah ulang file-nya.');
+    const xml = await fetchEPGUrl(db.epg.source).catch((e) => { throw fail(502, e.message); });
+    let meta;
+    try { meta = saveEPG(xml, 'url', db.epg.source); } catch (e) { throw fail(422, e.message); }
+    return send(res, 200, meta);
+  }
+  if (p === '/api/epg' && method === 'DELETE') {
+    needAdmin();
+    db.epg = null; save();
+    fs.rm(EPG_FILE, () => {});
+    return send(res, 200, { ok: true });
   }
 
   /* channel terkunci (DRM / dibatasi wilayah): disembunyikan untuk semua pengguna */
@@ -578,5 +819,18 @@ if (process.argv[2]) {
   }).listen(PORT, HOST, () => console.log(`ZanTV API jalan di http://${HOST}:${PORT} (data: ${DATA_DIR})`));
   pruneLog();
   setInterval(pruneLog, 6 * 3600 * 1000).unref();
+  setInterval(() => {
+    if (db.epg && db.epg.kind === 'url') autoLoadEpgUrl(db.epg.source);
+  }, 6 * 3600 * 1000).unref();
+  if (db.epg && db.epg.kind === 'url' && (!fs.existsSync(EPG_FILE) || Date.now() - (db.epg.updatedAt || 0) > 6 * 3600 * 1000)) {
+    autoLoadEpgUrl(db.epg.source);
+  } else if (!db.epg) {
+    for (const pl of db.playlists) {
+      try {
+        const eu = detectM3UEpgUrl(fs.readFileSync(path.join(PL_DIR, pl.id + '.m3u'), 'utf8'));
+        if (eu) { autoLoadEpgUrl(eu); break; }
+      } catch (e) {}
+    }
+  }
   db.playlists.filter((pl) => !pl.httpsChecked).forEach((pl) => upgradePlaylist(pl.id));
 }

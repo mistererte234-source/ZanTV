@@ -472,6 +472,89 @@ function renderGroups() {
   }).join('');
 }
 
+/* ------------------------------------------------------------------ */
+/* EPG (Jadwal Acara TV XMLTV)                                         */
+/* ------------------------------------------------------------------ */
+var EPG = { meta: null, channels: {}, chNames: {}, aliases: {} };
+
+function normEpgKey(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\.(id|co\.id|tv|com)$/i, '')
+    .replace(/\b(hd|fhd|uhd|4k|sd|indo|indonesia|tv|channel|ch)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function fmtClockWib(ms) {
+  if (!ms) return '';
+  try {
+    return new Date(ms).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).replace('.', ':');
+  } catch (e) {
+    var d = new Date(ms);
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+}
+
+function epgIdForChannel(c) {
+  if (!c || !EPG.channels) return '';
+  var al = EPG.aliases || {};
+  var tries = [];
+  if (c.tvgId) {
+    tries.push(c.tvgId, c.tvgId.toLowerCase(), normEpgKey(c.tvgId));
+  }
+  if (c.name) {
+    tries.push(c.name, c.name.toLowerCase(), normEpgKey(c.name));
+  }
+  for (var i = 0; i < tries.length; i++) {
+    var k = tries[i];
+    if (!k) continue;
+    if (EPG.channels[k] && EPG.channels[k].length) return k;
+    var mapped = al[k];
+    if (mapped && EPG.channels[mapped] && EPG.channels[mapped].length) return mapped;
+  }
+  return '';
+}
+
+function epgForChannel(c) {
+  var id = epgIdForChannel(c);
+  return id ? EPG.channels[id] : null;
+}
+
+function epgNowNext(c) {
+  var progs = epgForChannel(c);
+  if (!progs || !progs.length) return null;
+  var now = Date.now();
+  var curIdx = -1;
+  for (var i = 0; i < progs.length; i++) {
+    if (progs[i].start <= now && progs[i].stop > now) { curIdx = i; break; }
+  }
+  if (curIdx < 0) {
+    for (var j = 0; j < progs.length; j++) {
+      if (progs[j].start > now) { curIdx = j > 0 ? j - 1 : 0; break; }
+    }
+    if (curIdx < 0) curIdx = progs.length - 1;
+  }
+  var cur = progs[curIdx];
+  var next = progs[curIdx + 1] || null;
+  var isLive = cur && cur.start <= now && cur.stop > now;
+  var pct = isLive ? Math.max(3, Math.min(100, Math.round((now - cur.start) / Math.max(1, cur.stop - cur.start) * 100))) : 0;
+  return { cur: cur, next: next, isLive: isLive, pct: pct, list: progs };
+}
+
+function fetchEPG() {
+  if (!ME) return Promise.resolve();
+  return api('GET', '/api/epg').then(function (data) {
+    EPG = data && data.channels ? data : { meta: null, channels: {}, chNames: {}, aliases: {} };
+    renderList();
+    updateNow();
+    renderEpgStatus();
+  }).catch(function () {});
+}
+setInterval(function () { if (ME) fetchEPG(); }, 15 * 60 * 1000);
+setInterval(function () {
+  if (ME && EPG.meta) { updateNow(); }
+}, 30000);
+
 function renderList() {
   var pl = activePlaylist();
   if (!ME) { el.listCount.textContent = ''; el.list.innerHTML = ''; return; }
@@ -515,9 +598,13 @@ function renderList() {
     var logo = c.logo
       ? '<img src="' + esc(c.logo) + '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">'
       : '<b>' + esc(initials(c.name)) + '</b>';
+    var en = epgNowNext(c);
+    var subHtml = en && en.cur
+      ? '<span class="row-epg"><i class="row-epg-dot"></i>' + esc(fmtClockWib(en.cur.start) + ' · ' + en.cur.title) + '</span>'
+      : '<span>' + esc(c.group) + '</span>';
     html[i] = '<button class="row' + (c === active ? ' is-playing' : '') + '" role="option" data-i="' + i + '">' +
       '<span class="no">' + c.no + '</span><span class="logo">' + logo + '</span>' +
-      '<span class="t"><strong>' + esc(c.name) + '</strong><span>' + esc(c.group) + '</span></span>' +
+      '<span class="t"><strong>' + esc(c.name) + '</strong>' + subHtml + '</span>' +
       (S.favs.has(c.url) ? '<svg class="fav" viewBox="0 0 24 24" aria-label="favorit"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>' : '<span></span>') +
       '</button>';
   }
@@ -782,14 +869,43 @@ el.video.addEventListener('volumechange', syncMute);
 /* ------------------------------------------------------------------ */
 function updateNow() {
   var c = S.playing || S.cued;
+  var nowEpg = $('#nowEpg');
+  var guideBtn = $('#epgGuideBtn');
   if (!c) {
     el.nowNo.textContent = '';
     el.nowName.textContent = S.channels.length ? 'Pilih channel' : 'Belum ada channel';
     el.nowMeta.textContent = S.channels.length ? 'Pilih dari daftar, atau ketik nomor channel.' : 'Tambahkan playlist M3U untuk mulai.';
+    if (nowEpg) { nowEpg.hidden = true; nowEpg.innerHTML = ''; }
+    if (guideBtn) guideBtn.hidden = !EPG.meta;
   } else {
     el.nowNo.textContent = c.no;
     el.nowName.textContent = c.name;
     el.nowMeta.textContent = S.playing ? c.group : c.group + ', terakhir ditonton';
+    var en = epgNowNext(c);
+    if (nowEpg) {
+      if (en && en.cur) {
+        var range = fmtClockWib(en.cur.start) + ' – ' + fmtClockWib(en.cur.stop) + ' WIB';
+        var nextHtml = en.next
+          ? '<span class="now-epg-next">Selanjutnya ' + esc(fmtClockWib(en.next.start)) + ': <b>' + esc(en.next.title) + '</b></span>'
+          : '';
+        var barHtml = en.isLive
+          ? '<span class="now-epg-bar"><i style="width:' + en.pct + '%"></i></span>'
+          : '';
+        nowEpg.innerHTML =
+          '<div class="now-epg-cur">' +
+            '<span class="now-epg-tag">' + (en.isLive ? 'LIVE EPG' : 'JADWAL') + '</span>' +
+            '<strong class="now-epg-title">' + esc(en.cur.title) + '</strong>' +
+            '<span class="now-epg-time">' + esc(range) + '</span>' +
+          '</div>' +
+          barHtml +
+          nextHtml;
+        nowEpg.hidden = false;
+      } else {
+        nowEpg.hidden = true;
+        nowEpg.innerHTML = '';
+      }
+    }
+    if (guideBtn) guideBtn.hidden = !(en || EPG.meta);
   }
   var fav = !!c && S.favs.has(c.url);
   el.favBtn.setAttribute('aria-pressed', String(fav));
@@ -806,7 +922,12 @@ function cue(ch) {
 var osdTimer;
 function showOSD(ch, digits) {
   el.osdNo.textContent = digits != null ? digits : ch.no;
-  el.osdName.textContent = digits != null ? (ch ? ch.name : '') : ch.name;
+  var label = digits != null ? (ch ? ch.name : '') : ch.name;
+  if (digits == null && ch) {
+    var en = epgNowNext(ch);
+    if (en && en.cur) label += ' · ' + en.cur.title;
+  }
+  el.osdName.textContent = label;
   el.osd.classList.add('show');
   clearTimeout(osdTimer);
   osdTimer = setTimeout(function () { el.osd.classList.remove('show'); }, digits != null ? 1600 : 2600);
@@ -1199,8 +1320,26 @@ var ICON_DEL = '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 11v6M14 11v6M6 7l1 
 var ICON_EDIT = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/></svg>';
 var ICON_REFRESH = '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>';
 
+function renderEpgStatus() {
+  var st = $('#epgStatus');
+  var tools = $('#epgActiveTools');
+  var refBtn = $('#epgRefreshBtn');
+  if (!st) return;
+  if (EPG.meta) {
+    var m = EPG.meta;
+    st.textContent = 'EPG aktif: ' + (m.channelCount || 0) + ' channel · ' + (m.programmeCount || 0) + ' acara (' +
+      (m.kind === 'file' ? 'dari file ' + m.source : m.source) + ')';
+    if (tools) tools.hidden = !isAdmin();
+    if (refBtn) refBtn.hidden = m.kind !== 'url';
+  } else {
+    st.textContent = 'Belum ada EPG aktif. Jika header M3U memiliki atribut url-tvg, server akan mengambilnya otomatis.';
+    if (tools) tools.hidden = true;
+  }
+}
+
 function renderPlaylistDialog() {
   $('#plAdmin').hidden = !isAdmin();
+  renderEpgStatus();
   var nBlocked = Object.keys(BLOCKED).length;
   var ub = $('#plUnblock');
   if (ub) {
@@ -1254,6 +1393,7 @@ function openEdit(id, li) {
       setPlaylistLabel();
       toast(body.url ? 'Disimpan: ' + np.count + ' channel dari alamat baru' : 'Nama playlist disimpan');
       if (body.url && np.id === S.activeId) loadPlaylist(np);
+      if (body.url) setTimeout(fetchEPG, 2000);
     }).catch(function (err) { btn.disabled = false; toast(err.message); });
   });
 }
@@ -1284,7 +1424,7 @@ $('#plAddUrl').addEventListener('click', function () {
   if (!/^https?:\/\//i.test(url)) { toast('Masukkan alamat yang diawali http:// atau https://'); $('#plUrl').focus(); return; }
   var name = $('#plName').value.trim();
   $('#plUrl').value = ''; $('#plName').value = '';
-  adminAdd({ name: name, url: url });
+  adminAdd({ name: name, url: url }).then(function () { setTimeout(fetchEPG, 2500); });
 });
 $('#plFile').addEventListener('change', function (e) {
   var f = e.target.files && e.target.files[0];
@@ -1293,10 +1433,113 @@ $('#plFile').addEventListener('change', function (e) {
     if (!parseM3U(text).length) { toast('File ini tidak berisi channel M3U'); return; }
     var name = $('#plName').value.trim() || f.name.replace(/\.(m3u8?|txt)$/i, '');
     $('#plName').value = '';
-    adminAdd({ name: name, filename: f.name, text: text });
+    adminAdd({ name: name, filename: f.name, text: text }).then(function () { setTimeout(fetchEPG, 2500); });
   });
   e.target.value = '';
 });
+
+/* Aksi Admin EPG + Dialog Jadwal Acara */
+$('#epgAddUrl').addEventListener('click', function () {
+  var url = $('#epgUrl').value.trim();
+  if (!/^https?:\/\//i.test(url)) { toast('Masukkan alamat EPG (.xml / .xml.gz) yang diawali http:// atau https://'); $('#epgUrl').focus(); return; }
+  var btn = $('#epgAddUrl');
+  btn.disabled = true;
+  toast('Mengambil dan memproses jadwal EPG dari server…');
+  api('POST', '/api/epg', { url: url }).then(function (meta) {
+    $('#epgUrl').value = '';
+    toast('EPG aktif: ' + meta.channelCount + ' channel, ' + meta.programmeCount + ' acara');
+    return fetchEPG();
+  }).catch(function (err) { toast(err.message); }).then(function () { btn.disabled = false; });
+});
+
+$('#epgFile').addEventListener('change', function (e) {
+  var f = e.target.files && e.target.files[0];
+  if (!f) return;
+  toast('Mengunggah dan memproses file EPG…');
+  var reader = new FileReader();
+  reader.onload = function () {
+    var res = String(reader.result || '');
+    var comma = res.indexOf(',');
+    var b64 = comma >= 0 ? res.slice(comma + 1) : '';
+    api('POST', '/api/epg', { filename: f.name, base64: b64 }).then(function (meta) {
+      toast('EPG dari file aktif: ' + meta.channelCount + ' channel, ' + meta.programmeCount + ' acara');
+      return fetchEPG();
+    }).catch(function (err) { toast(err.message); });
+  };
+  reader.readAsDataURL(f);
+  e.target.value = '';
+});
+
+$('#epgRefreshBtn').addEventListener('click', function () {
+  toast('Memperbarui jadwal EPG…');
+  api('POST', '/api/epg/refresh').then(function (meta) {
+    toast('EPG diperbarui: ' + meta.channelCount + ' channel, ' + meta.programmeCount + ' acara');
+    return fetchEPG();
+  }).catch(function (err) { toast(err.message); });
+});
+
+$('#epgDelBtn').addEventListener('click', function () {
+  if (!confirm('Hapus jadwal acara EPG untuk semua pengguna?')) return;
+  api('DELETE', '/api/epg').then(function () {
+    EPG = { meta: null, channels: {}, chNames: {}, aliases: {} };
+    renderList();
+    updateNow();
+    renderEpgStatus();
+    toast('EPG dihapus');
+  }).catch(function (err) { toast(err.message); });
+});
+
+var epgDlg = $('#epgDialog');
+function openEpgDialog() {
+  if (!epgDlg) return;
+  var c = S.playing || S.cued;
+  var titleEl = $('#epgDialogTitle');
+  var listEl = $('#epgModalList');
+  var now = Date.now();
+  var progs = c ? epgForChannel(c) : null;
+
+  if (c && progs && progs.length) {
+    titleEl.textContent = 'Jadwal Acara · ' + c.name;
+    listEl.innerHTML = progs.map(function (p) {
+      var isLive = p.start <= now && p.stop > now;
+      var pct = isLive ? Math.max(3, Math.min(100, Math.round((now - p.start) / Math.max(1, p.stop - p.start) * 100))) : 0;
+      return '<div class="epg-card' + (isLive ? ' is-live' : '') + '">' +
+        '<div class="epg-card-head">' +
+          '<span class="epg-card-time">' + esc(fmtClockWib(p.start) + ' – ' + fmtClockWib(p.stop) + ' WIB') + '</span>' +
+          (isLive ? '<span class="ticker-live-badge"><span class="ticker-live-dot"></span>SEDANG TAYANG</span>' : (p.cat ? '<span class="epg-card-cat">' + esc(p.cat) + '</span>' : '')) +
+        '</div>' +
+        '<strong class="epg-card-title">' + esc(p.title) + '</strong>' +
+        (p.desc ? '<p class="epg-card-desc">' + esc(p.desc) + '</p>' : '') +
+        (isLive ? '<div class="now-epg-bar"><i style="width:' + pct + '%"></i></div>' : '') +
+      '</div>';
+    }).join('');
+  } else if (EPG.meta && EPG.channels) {
+    titleEl.textContent = 'Jadwal Acara TV (EPG)';
+    var keys = Object.keys(EPG.channels);
+    listEl.innerHTML = keys.slice(0, 60).map(function (k) {
+      var arr = EPG.channels[k] || [];
+      if (!arr.length) return '';
+      var cur = arr[0];
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i].start <= now && arr[i].stop > now) { cur = arr[i]; break; }
+      }
+      var chTitle = (EPG.chNames && EPG.chNames[k]) || k;
+      return '<div class="epg-card">' +
+        '<div class="epg-card-head"><span class="epg-card-cat">' + esc(chTitle) + '</span><span class="epg-card-time">' + esc(fmtClockWib(cur.start) + ' – ' + fmtClockWib(cur.stop) + ' WIB') + '</span></div>' +
+        '<strong class="epg-card-title">' + esc(cur.title) + '</strong>' +
+        (cur.desc ? '<p class="epg-card-desc">' + esc(cur.desc) + '</p>' : '') +
+      '</div>';
+    }).join('') || '<p class="hint">Tidak ada jadwal acara untuk ditampilkan.</p>';
+  } else {
+    titleEl.textContent = 'Jadwal Acara TV (EPG)';
+    listEl.innerHTML = '<p class="hint">Belum ada data EPG yang cocok untuk channel ini.</p>';
+  }
+  epgDlg.showModal();
+}
+
+if ($('#epgGuideBtn')) $('#epgGuideBtn').addEventListener('click', openEpgDialog);
+if ($('#epgDialogClose')) $('#epgDialogClose').addEventListener('click', function () { epgDlg.close(); });
+if (epgDlg) epgDlg.addEventListener('click', function (e) { if (e.target === epgDlg) epgDlg.close(); });
 
 /* ------------------------------------------------------------------ */
 /* Dialog akun & pengguna                                              */
@@ -1451,11 +1694,13 @@ function onLoggedOut() {
   E.token++;
   destroyEngine();
   S.playing = null; S.cued = null; S.channels = []; S.raw = []; S.hidden = 0; S.view = []; S.playlists = [];
+  EPG = { meta: null, channels: {}, chNames: {}, aliases: {} };
   el.idle.hidden = false; hideMsg(); setBusy(false);
   el.stage.classList.remove('is-playing');
   if (el.dialog.open) el.dialog.close();
   if (acct.open) acct.close();
   if (actDlg.open) actDlg.close();
+  if (epgDlg && epgDlg.open) epgDlg.close();
   document.body.classList.remove('is-admin');
   clearSearch();
   renderGroups(); renderList(); updateNow();
@@ -1470,6 +1715,7 @@ function onLoggedIn(user) {
   S.activeId = LS.get('active', null);
   syncBlocked();
   fetchPlaylists(true);
+  fetchEPG();
   sendPresence();
   setTimeout(askLocation, 1200);
 }
