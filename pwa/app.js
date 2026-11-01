@@ -300,7 +300,7 @@ function verifyActiveGps(manual) {
     }).then(function (res) {
       if (manual) {
         if (isAdmin()) toast(gps.lat != null ? 'Lokasi GPS Admin tercatat (' + gps.lat.toFixed(5) + ', ' + gps.lng.toFixed(5) + ')' : 'Akun Admin bebas batas lokasi GPS');
-        else toast('GPS terverifikasi (jarak ' + (res && res.dist != null ? res.dist : 0) + ' m dari titik terdaftar)');
+        else toast('GPS terverifikasi: ' + ((res && res.label) ? res.label + ' ' : '') + '(jarak ' + (res && res.dist != null ? res.dist : 0) + ' m)');
       }
       return api('GET', '/api/me').then(function (u) { ME = u; syncLocToggle(); }).catch(function () {});
     });
@@ -321,11 +321,11 @@ function syncLocToggle() {
   if (isAdmin()) {
     st.textContent = 'Admin: Bebas akses dari lokasi mana pun tanpa blokir GPS.';
     btn.textContent = 'Catat GPS';
-  } else if (ME.gps && typeof ME.gps.lat === 'number') {
-    st.textContent = 'Terdaftar di DB: ' + ME.gps.lat + ', ' + ME.gps.lng + ' (batas radius ' + (ME.gps.radius || 2000) + ' m).';
+  } else if (ME.myGps && typeof ME.myGps.lat === 'number') {
+    st.textContent = 'Terdaftar (' + (ME.myGps.label || 'User') + '): ' + ME.myGps.lat + ', ' + ME.myGps.lng + ' · radius ' + (ME.myGps.radius || 2000) + ' m.';
     btn.textContent = 'Verifikasi GPS';
   } else {
-    st.textContent = 'Belum ada GPS terdaftar di database user.';
+    st.textContent = 'Belum ada titik GPS terdaftar untuk perangkat ini.';
     btn.textContent = 'Verifikasi GPS';
   }
 }
@@ -1783,7 +1783,7 @@ function loadUsers() {
       var topHtml =
         '<div class="user-item-top">' +
           '<div class="pl-item"><strong>' + esc(u.name) + (self ? ' (kamu)' : '') + '</strong><span>' + roleLabel(u.role) +
-            (u.role === 'admin' ? ': bebas GPS & kelola sistem' : ': wajib terdaftar di DB GPS') + '</span></div>' +
+            (u.role === 'admin' ? ': bebas GPS & kelola sistem' : ': multi-user dengan whitelist titik GPS') + '</span></div>' +
           '<div class="user-item-actions">' +
             '<button class="ic" data-pw="' + esc(u.name) + '" title="Atur ulang kata sandi" aria-label="Atur ulang kata sandi ' + esc(u.name) + '">' +
               '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></button>' +
@@ -1797,50 +1797,78 @@ function loadUsers() {
         '</li>';
       }
 
-      var rad = (u.gps && u.gps.radius) || u.gpsRadius || 2000;
+      var gpsList = Array.isArray(u.gpsList) ? u.gpsList : [];
+      var pendingList = Array.isArray(u.pendingGpsList) ? u.pendingGpsList : [];
+      var rad = u.gpsRadius || 2000;
+
       var statusHtml = '';
-      if (u.gps && typeof u.gps.lat === 'number' && typeof u.gps.lng === 'number') {
-        var coordStr = u.gps.lat + ', ' + u.gps.lng;
-        statusHtml =
-          '<span class="user-gps-badge is-ok">📍 Terdaftar</span>' +
-          '<a class="user-gps-link" href="' + esc(mapsUrl(u.gps.lat, u.gps.lng)) + '" target="_blank" rel="noopener">' + esc(coordStr) + '</a>' +
-          '<span>· radius izin <b>' + esc(rad) + ' m</b></span>';
-      } else if (u.gpsAutoBind) {
-        statusHtml =
-          '<span class="user-gps-badge is-Wait">🔄 Auto-Bind Aktif</span>' +
-          '<span>Otomatis mengunci lokasi GPS saat login pertama (radius ' + esc(rad) + ' m).</span>';
+      if (gpsList.length > 0) {
+        statusHtml = '<span class="user-gps-badge is-ok">📍 ' + gpsList.length + ' Titik GPS User Terdaftar</span>' +
+          '<span>Hanya perangkat di dalam titik GPS berikut yang diizinkan masuk:</span>';
       } else {
-        statusHtml =
-          '<span class="user-gps-badge is-warn">⛔ Belum Terdaftar di DB GPS</span>' +
-          '<span>Login otomatis ditolak sampai disetujui Admin.</span>';
+        statusHtml = '<span class="user-gps-badge is-warn">⛔ Belum Ada Titik GPS Terdaftar</span>' +
+          '<span>Semua login ke akun ini ditolak sampai titik GPS ditambahkan / disetujui.</span>';
+      }
+      if (u.gpsAutoBind) {
+        statusHtml += ' <span class="user-gps-badge is-Wait">🔄 Auto-Tambah 1 User Baru Aktif</span>';
+      }
+
+      var itemsHtml = '';
+      if (gpsList.length > 0) {
+        itemsHtml = '<div class="user-gps-items">' + gpsList.map(function (g, idx) {
+          var coordStr = g.lat + ', ' + g.lng;
+          var gRad = g.radius || rad;
+          var devStr = g.lastDevice ? fmtDevice(g.lastDevice) : '';
+          return '<div class="user-gps-entry">' +
+            '<div class="user-gps-entry-info">' +
+              '<strong>👤 ' + esc(g.label || ('User #' + (idx + 1))) + '</strong>' +
+              '<span><a class="user-gps-link" href="' + esc(mapsUrl(g.lat, g.lng)) + '" target="_blank" rel="noopener">' + esc(coordStr) + '</a> · radius <b>' + esc(gRad) + ' m</b>' +
+                (devStr ? ' · <small>' + esc(devStr) + '</small>' : '') +
+              '</span>' +
+            '</div>' +
+            '<div class="user-gps-entry-btns">' +
+              '<button class="btn ghost" type="button" data-gps-edit="' + esc(u.name) + '" data-id="' + esc(g.id) + '" data-label="' + esc(g.label || '') + '" data-lat="' + esc(g.lat) + '" data-lng="' + esc(g.lng) + '" data-rad="' + esc(gRad) + '" title="Ubah nama/koordinat/radius">✏️ Ubah</button>' +
+              '<button class="btn ghost" type="button" data-gps-del-item="' + esc(u.name) + '" data-id="' + esc(g.id) + '" data-label="' + esc(g.label || '') + '" title="Hapus GPS user ini">🗑️ Hapus</button>' +
+            '</div>' +
+          '</div>';
+        }).join('') + '</div>';
       }
 
       var pendingHtml = '';
-      if (u.pendingGps && typeof u.pendingGps.lat === 'number' && typeof u.pendingGps.lng === 'number') {
-        var pCoord = u.pendingGps.lat + ', ' + u.pendingGps.lng;
-        pendingHtml =
-          '<div class="user-gps-pending">' +
-            '<span>🔔 Percobaan login dari <a class="user-gps-link" href="' + esc(mapsUrl(u.pendingGps.lat, u.pendingGps.lng)) + '" target="_blank" rel="noopener">' + esc(pCoord) + '</a>' +
-              (u.pendingGps.accuracy ? ' (±' + esc(u.pendingGps.accuracy) + 'm)' : '') +
-              (u.pendingGps.dist ? ' · berjarak <b>' + esc(u.pendingGps.dist) + ' m</b> dari titik lama' : '') +
-            '</span>' +
-            '<button class="btn primary" type="button" data-gps-approve="' + esc(u.name) + '" data-rad="' + esc(rad) + '">✓ Setujui & Kunci GPS Ini</button>' +
+      if (pendingList.length > 0) {
+        pendingHtml = '<div class="user-gps-pending-list">' + pendingList.map(function (p) {
+          var pCoord = p.lat + ', ' + p.lng;
+          var pDev = fmtDevice(p.device);
+          return '<div class="user-gps-pending">' +
+            '<div class="user-gps-pending-info">' +
+              '<strong>🔔 Menunggu Izin Masuk (' + fmtTime(p.at || Date.now()) + ')</strong>' +
+              '<span>Koordinat: <a class="user-gps-link" href="' + esc(mapsUrl(p.lat, p.lng)) + '" target="_blank" rel="noopener">' + esc(pCoord) + '</a>' +
+                (p.accuracy ? ' (±' + esc(p.accuracy) + 'm)' : '') +
+                (pDev ? ' · ' + esc(pDev) : '') +
+                (p.ip ? ' · IP ' + esc(p.ip) : '') +
+              '</span>' +
+            '</div>' +
+            '<div class="user-gps-pending-btns">' +
+              '<button class="btn primary" type="button" data-gps-approve="' + esc(u.name) + '" data-pid="' + esc(p.id) + '" data-rad="' + esc(rad) + '" data-next="' + (gpsList.length + 1) + '">✓ Setujui & Beri Nama</button>' +
+              '<button class="btn ghost" type="button" data-gps-reject="' + esc(u.name) + '" data-pid="' + esc(p.id) + '">✕ Tolak</button>' +
+            '</div>' +
           '</div>';
+        }).join('') + '</div>';
       }
-
-      var curLat = (u.gps && u.gps.lat != null) ? u.gps.lat : ((u.pendingGps && u.pendingGps.lat != null) ? u.pendingGps.lat : '');
-      var curLng = (u.gps && u.gps.lng != null) ? u.gps.lng : ((u.pendingGps && u.pendingGps.lng != null) ? u.pendingGps.lng : '');
 
       var btnsHtml =
         '<div class="user-gps-btns">' +
-          '<button class="btn ghost" type="button" data-gps-set="' + esc(u.name) + '" data-lat="' + esc(curLat) + '" data-lng="' + esc(curLng) + '" data-rad="' + esc(rad) + '">📍 Atur Koordinat / Radius</button>' +
-          '<button class="btn ghost" type="button" data-gps-autobind="' + esc(u.name) + '" data-rad="' + esc(rad) + '">🔄 Auto-Bind Login Berikutnya</button>' +
-          ((u.gps || u.gpsAutoBind || u.pendingGps) ? '<button class="btn ghost" type="button" data-gps-clear="' + esc(u.name) + '">🚫 Cabut GPS</button>' : '') +
+          '<button class="btn ghost" type="button" data-gps-add="' + esc(u.name) + '" data-rad="' + esc(rad) + '" data-next="' + (gpsList.length + 1) + '">➕ Tambah Titik GPS User</button>' +
+          '<button class="btn ghost" type="button" data-gps-autobind="' + esc(u.name) + '" data-active="' + (u.gpsAutoBind ? '1' : '0') + '" data-rad="' + esc(rad) + '">' +
+            (u.gpsAutoBind ? '⏸ Matikan Auto-Tambah' : '🔄 Auto-Tambah 1 Login Berikutnya') +
+          '</button>' +
+          ((gpsList.length > 0 || pendingList.length > 0) ? '<button class="btn ghost" type="button" data-gps-clear="' + esc(u.name) + '">🚫 Hapus Semua GPS</button>' : '') +
         '</div>';
 
       return '<li class="user-item">' + topHtml +
         '<div class="user-gps-box">' +
           '<div class="user-gps-status">' + statusHtml + '</div>' +
+          itemsHtml +
           pendingHtml +
           btnsHtml +
         '</div>' +
@@ -1852,7 +1880,10 @@ $('#userList').addEventListener('click', function (e) {
   var pw = e.target.closest('[data-pw]');
   var del = e.target.closest('[data-deluser]');
   var appGps = e.target.closest('[data-gps-approve]');
-  var setGps = e.target.closest('[data-gps-set]');
+  var rejGps = e.target.closest('[data-gps-reject]');
+  var addGps = e.target.closest('[data-gps-add]');
+  var editGps = e.target.closest('[data-gps-edit]');
+  var delItemGps = e.target.closest('[data-gps-del-item]');
   var autoGps = e.target.closest('[data-gps-autobind]');
   var clrGps = e.target.closest('[data-gps-clear]');
   if (pw) {
@@ -1860,7 +1891,7 @@ $('#userList').addEventListener('click', function (e) {
     var np = prompt('Kata sandi baru untuk ' + name + ' (minimal 8 karakter):');
     if (np == null) return;
     api('POST', '/api/users/' + encodeURIComponent(name) + '/password', { password: np })
-      .then(function () { toast('Kata sandi ' + name + ' diganti. Dia perlu masuk ulang.'); })
+      .then(function () { toast('Kata sandi ' + name + ' diganti. Semua sesi harus masuk ulang.'); })
       .catch(function (err) { toast(err.message); });
   } else if (del) {
     var n = del.dataset.deluser;
@@ -1870,38 +1901,110 @@ $('#userList').addEventListener('click', function (e) {
       .catch(function (err) { toast(err.message); });
   } else if (appGps) {
     var uName = appGps.dataset.gpsApprove;
+    var pId = appGps.dataset.pid;
     var defRad = appGps.dataset.rad || '2000';
-    var radInput = prompt('Setujui & kunci titik GPS untuk "' + uName + '".\nMasukkan batas radius izin dalam meter (misal 2000 = 2 km):', defRad);
+    var defLabel = 'User #' + (appGps.dataset.next || '1');
+    var labelIn = prompt('Beri nama / label untuk pemilik titik GPS ini (misal: Rumah Budi / Kosan Andi):', defLabel);
+    if (labelIn == null) return;
+    var radInput = prompt('Masukkan batas radius izin lokasi dalam meter (misal 2000 = 2 km):', defRad);
     if (radInput == null) return;
-    api('POST', '/api/users/' + encodeURIComponent(uName) + '/gps', { action: 'approve', radius: +radInput || 2000 })
-      .then(function () { toast('Lokasi GPS ' + uName + ' berhasil disetujui & disimpan di database'); loadUsers(); })
-      .catch(function (err) { toast(err.message); });
-  } else if (setGps) {
-    var sName = setGps.dataset.gpsSet;
-    var defCoord = (setGps.dataset.lat && setGps.dataset.lng) ? (setGps.dataset.lat + ', ' + setGps.dataset.lng) : '';
-    var coordIn = prompt('Masukkan koordinat GPS (Latitude, Longitude) untuk "' + sName + '"\n(Bisa disalin dari Google Maps, contoh: -6.20000, 106.81666):', defCoord);
+    api('POST', '/api/users/' + encodeURIComponent(uName) + '/gps', {
+      action: 'approve',
+      pendingId: pId,
+      label: labelIn.trim() || defLabel,
+      radius: +radInput || 2000
+    }).then(function () {
+      toast('Titik GPS "' + (labelIn.trim() || defLabel) + '" ditambahkan ke database ' + uName);
+      loadUsers();
+    }).catch(function (err) { toast(err.message); });
+  } else if (rejGps) {
+    var rName = rejGps.dataset.gpsReject;
+    api('POST', '/api/users/' + encodeURIComponent(rName) + '/gps', {
+      action: 'reject_pending',
+      pendingId: rejGps.dataset.pid
+    }).then(function () {
+      toast('Permintaan GPS ditolak & dihapus');
+      loadUsers();
+    }).catch(function (err) { toast(err.message); });
+  } else if (addGps) {
+    var sName = addGps.dataset.gpsAdd;
+    var nextNo = addGps.dataset.next || '1';
+    var lbl = prompt('Nama / label untuk user GPS baru di akun "' + sName + '" (contoh: Rumah Budi):', 'User #' + nextNo);
+    if (lbl == null) return;
+    var coordIn = prompt('Masukkan koordinat GPS (Latitude, Longitude) untuk "' + (lbl || ('User #' + nextNo)) + '"\n(Salin dari Google Maps, contoh: -6.20000, 106.81666):', '');
     if (coordIn == null) return;
     var parts = coordIn.split(/[,\s]+/).map(function (x) { return x.trim(); }).filter(Boolean);
     if (parts.length < 2 || !Number.isFinite(+parts[0]) || !Number.isFinite(+parts[1])) {
       toast('Format koordinat harus: latitude, longitude (contoh: -6.20000, 106.81666)');
       return;
     }
-    var rIn = prompt('Masukkan radius maksimal izin lokasi dalam meter (contoh 2000 = 2 km):', setGps.dataset.rad || '2000');
+    var rIn = prompt('Masukkan radius maksimal izin lokasi dalam meter (contoh 2000 = 2 km):', addGps.dataset.rad || '2000');
     if (rIn == null) return;
-    api('POST', '/api/users/' + encodeURIComponent(sName) + '/gps', { action: 'set', lat: +parts[0], lng: +parts[1], radius: +rIn || 2000 })
-      .then(function () { toast('Database GPS ' + sName + ' diperbarui'); loadUsers(); })
-      .catch(function (err) { toast(err.message); });
+    api('POST', '/api/users/' + encodeURIComponent(sName) + '/gps', {
+      action: 'add',
+      label: lbl.trim() || ('User #' + nextNo),
+      lat: +parts[0],
+      lng: +parts[1],
+      radius: +rIn || 2000
+    }).then(function () {
+      toast('Titik GPS baru ditambahkan ke akun ' + sName);
+      loadUsers();
+    }).catch(function (err) { toast(err.message); });
+  } else if (editGps) {
+    var eName = editGps.dataset.gpsEdit;
+    var gId = editGps.dataset.id;
+    var curLbl = editGps.dataset.label || 'User';
+    var newLbl = prompt('Ubah nama / label pemilik titik GPS ini:', curLbl);
+    if (newLbl == null) return;
+    var defCoord = editGps.dataset.lat + ', ' + editGps.dataset.lng;
+    var newCoord = prompt('Ubah koordinat GPS (Latitude, Longitude):', defCoord);
+    if (newCoord == null) return;
+    var cParts = newCoord.split(/[,\s]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+    if (cParts.length < 2 || !Number.isFinite(+cParts[0]) || !Number.isFinite(+cParts[1])) {
+      toast('Format koordinat harus: latitude, longitude');
+      return;
+    }
+    var newRad = prompt('Ubah batas radius izin lokasi (meter):', editGps.dataset.rad || '2000');
+    if (newRad == null) return;
+    api('POST', '/api/users/' + encodeURIComponent(eName) + '/gps', {
+      action: 'set',
+      gpsId: gId,
+      label: newLbl.trim() || curLbl,
+      lat: +cParts[0],
+      lng: +cParts[1],
+      radius: +newRad || 2000
+    }).then(function () {
+      toast('Titik GPS "' + (newLbl.trim() || curLbl) + '" diperbarui');
+      loadUsers();
+    }).catch(function (err) { toast(err.message); });
+  } else if (delItemGps) {
+    var dName = delItemGps.dataset.gpsDelItem;
+    var dId = delItemGps.dataset.id;
+    var dLbl = delItemGps.dataset.label || 'titik GPS ini';
+    if (!confirm('Hapus akses GPS untuk "' + dLbl + '" dari akun ' + dName + '?\nPerangkat yang memakai lokasi ini akan langsung dikeluarkan, sedangkan user lain tetap aman.')) return;
+    api('POST', '/api/users/' + encodeURIComponent(dName) + '/gps', {
+      action: 'delete_item',
+      gpsId: dId
+    }).then(function () {
+      toast('Akses GPS "' + dLbl + '" telah dihapus');
+      loadUsers();
+    }).catch(function (err) { toast(err.message); });
   } else if (autoGps) {
     var aName = autoGps.dataset.gpsAutobind;
-    if (!confirm('Aktifkan Auto-Bind untuk "' + aName + '"? Saat dia login berikutnya, titik GPS perangkatnya akan otomatis dikunci ke database.')) return;
-    api('POST', '/api/users/' + encodeURIComponent(aName) + '/gps', { action: 'autobind', radius: +autoGps.dataset.rad || 2000 })
-      .then(function () { toast('Auto-Bind diaktifkan untuk ' + aName); loadUsers(); })
-      .catch(function (err) { toast(err.message); });
+    var isOn = autoGps.dataset.active === '1';
+    api('POST', '/api/users/' + encodeURIComponent(aName) + '/gps', {
+      action: 'autobind',
+      enable: !isOn,
+      radius: +autoGps.dataset.rad || 2000
+    }).then(function () {
+      toast(!isOn ? 'Auto-Tambah aktif: 1 user baru berikutnya yang login akan otomatis ditambahkan ke DB GPS' : 'Auto-Tambah dimatikan');
+      loadUsers();
+    }).catch(function (err) { toast(err.message); });
   } else if (clrGps) {
     var cName = clrGps.dataset.gpsClear;
-    if (!confirm('Cabut & hapus lokasi GPS terdaftar untuk "' + cName + '"? Akun ini akan langsung dikeluarkan dan ditolak saat login.')) return;
+    if (!confirm('Hapus SEMUA daftar titik GPS pada akun "' + cName + '"? Semua user yang sedang memakai akun ini akan langsung dikeluarkan.')) return;
     api('POST', '/api/users/' + encodeURIComponent(cName) + '/gps', { action: 'clear' })
-      .then(function () { toast('Akses GPS ' + cName + ' telah dicabut'); loadUsers(); })
+      .then(function () { toast('Semua titik GPS pada ' + cName + ' telah dihapus'); loadUsers(); })
       .catch(function (err) { toast(err.message); });
   }
 });
@@ -1964,7 +2067,7 @@ var ACT_LABEL = {
   login: 'Masuk',
   login_failed: 'Gagal masuk (sandi)',
   login_gps_unregistered: 'Ditolak: GPS belum terdaftar',
-  login_gps_mismatch: 'Ditolak: GPS di luar radius',
+  login_gps_mismatch: 'Ditolak: GPS belum terdaftar',
   login_gps_missing: 'Ditolak: Tanpa izin GPS',
   logout: 'Keluar',
   watch: 'Menonton',
@@ -1990,13 +2093,9 @@ function actDetail(e) {
     var q = e.lat + ',' + e.lng;
     return '<a href="https://www.google.com/maps?q=' + encodeURIComponent(q) + '" target="_blank" rel="noopener">' + esc(q) + '</a><small>akurasi sekitar ' + e.accuracy + ' m</small>';
   }
-  if (e.type === 'login_gps_unregistered') {
+  if (e.type === 'login_gps_unregistered' || e.type === 'login_gps_mismatch') {
     var qu = e.lat + ',' + e.lng;
-    return '<a href="https://www.google.com/maps?q=' + encodeURIComponent(qu) + '" target="_blank" rel="noopener">' + esc(qu) + '</a><small>belum terdaftar di DB GPS (±' + (e.accuracy || 0) + ' m)</small>';
-  }
-  if (e.type === 'login_gps_mismatch') {
-    var qm = e.lat + ',' + e.lng;
-    return '<a href="https://www.google.com/maps?q=' + encodeURIComponent(qm) + '" target="_blank" rel="noopener">' + esc(qm) + '</a><small>jarak ' + (e.dist || 0) + ' m (batas ' + (e.maxRadius || 2000) + ' m)</small>';
+    return '<a href="https://www.google.com/maps?q=' + encodeURIComponent(qu) + '" target="_blank" rel="noopener">' + esc(qu) + '</a><small>menunggu persetujuan Admin (±' + (e.accuracy || 0) + ' m)</small>';
   }
   if (e.type === 'login_gps_missing') {
     return '<small>Perangkat menolak / mematikan akses GPS (' + esc(e.reason || 'no_gps') + ')</small>';
@@ -2007,7 +2106,8 @@ function renderPresence(list) {
   var box = $('#actLive');
   if (!list.length) { box.innerHTML = '<p class="hint">Tidak ada yang aktif dalam 3 menit terakhir.</p>'; return; }
   box.innerHTML = list.map(function (p) {
-    return '<div class="live-item"><i></i><div><strong>' + esc(p.user) + '</strong><span>' +
+    var uDisplay = esc(p.user) + (p.gpsLabel ? ' · 📍 ' + esc(p.gpsLabel) : '');
+    return '<div class="live-item"><i></i><div><strong>' + uDisplay + '</strong><span>' +
       (p.channel ? 'menonton ' + esc(p.channel) : 'membuka aplikasi') + '</span><small>' + esc(fmtDevice(p.device)) + ' · ' + esc(p.ip) + '</small></div></div>';
   }).join('');
 }
@@ -2021,7 +2121,8 @@ function loadActivity(more) {
   if (!more) tbody.innerHTML = '<tr><td colspan="5" class="hint">Memuat…</td></tr>';
   api('GET', '/api/activity?' + params.join('&')).then(function (r) {
     var html = r.items.map(function (e) {
-      return '<tr class="t-' + esc(e.type) + '"><td>' + fmtTime(e.ts) + '</td><td>' + esc(e.user || '-') + '</td><td><span class="tag">' +
+      var uCol = esc(e.user || '-') + (e.gpsLabel ? '<br><small style="color:var(--cyan)">📍 ' + esc(e.gpsLabel) + '</small>' : '');
+      return '<tr class="t-' + esc(e.type) + '"><td>' + fmtTime(e.ts) + '</td><td>' + uCol + '</td><td><span class="tag">' +
         esc(ACT_LABEL[e.type] || e.type) + '</span>' + actDetail(e) + '</td><td>' + esc(fmtDevice(e.device)) + '</td><td class="ip">' + esc(e.ip) + '</td></tr>';
     }).join('');
     if (!more) tbody.innerHTML = html || '<tr><td colspan="5" class="hint">Belum ada catatan.</td></tr>';
