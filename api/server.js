@@ -1264,14 +1264,43 @@ async function handle(req, res) {
       const ff = q ? startFfmpegPipe(q, null, chosenUa) : null;
       const outStream = (ff && ff.stdin) ? ff.stdin : res;
 
+      let lastVideoPts = null;
+      let lastTailSig = null;
+
+      // Parser PTS akurat dari paket TS 188-byte untuk sambungan mulus (seamless splice) tanpa lompatan waktu
+      const parsePts = (pkt) => {
+        if (pkt.length < 188 || pkt[0] !== 0x47) return null;
+        const payloadStart = (pkt[1] & 0x40) !== 0;
+        if (!payloadStart) return null;
+        const pid = ((pkt[1] & 0x1F) << 8) | pkt[2];
+        const af = (pkt[3] >> 4) & 0x3;
+        let offset = 4;
+        if (af === 2 || af === 3) offset += 1 + pkt[4];
+        if (offset + 14 <= 188) {
+          if (pkt[offset] === 0x00 && pkt[offset + 1] === 0x00 && pkt[offset + 2] === 0x01) {
+            const streamId = pkt[offset + 3];
+            const ptsFlags = (pkt[offset + 7] >> 6) & 0x3;
+            if (ptsFlags === 2 || ptsFlags === 3) {
+              const b = pkt.subarray(offset + 9, offset + 14);
+              const pts = (((b[0] & 0x0E) * 2 ** 29) + ((b[1] & 0xFF) << 22) + ((b[2] & 0xFE) << 14) + ((b[3] & 0xFF) << 7) + ((b[4] & 0xFE) >> 1)) / 90000;
+              return { pid, streamId, pts, isVideo: (streamId & 0xF0) === 0xE0 };
+            }
+          }
+        }
+        return null;
+      };
+
       // Pompa paket MPEG-TS: kirim instan paket awal untuk startup kilat, lalu batch kelipatan 188 byte
-      const pumpTsAligned = async (body, stepAc) => {
+      // Dilengkapi Seamless PTS Splice agar reconnect tidak mengirim duplikat video lama yang membuat player tersendat per 5 detik
+      const pumpTsAligned = async (body, stepAc, isReconnect) => {
         if (!body) return 0;
         const reader = body.getReader();
         let rem = Buffer.alloc(0);
         let synced = false;
         let bytesSent = 0;
         let idleTimer = null;
+        let skipping = !!(isReconnect && (lastVideoPts !== null || lastTailSig));
+        let skippedBytes = 0;
         const resetIdle = () => {
           clearTimeout(idleTimer);
           idleTimer = setTimeout(() => { try { stepAc.abort(); } catch (e) {} }, 12000);
@@ -1297,12 +1326,69 @@ async function handle(req, res) {
               if (syncPos > 0) rem = rem.subarray(syncPos);
               synced = true;
             }
-            // Kirim paket langsung kelipatan 188 byte tanpa ditunda-tunda agar browser langsung memutar tanpa buffering
+
+            // Jika ini reconnect, lewati duplikasi paket lama (overlap) yang dikirim ulang server IPTV
+            if (skipping) {
+              // Jalur 1: Tail signature matching (jika ada)
+              if (lastTailSig && rem.length >= lastTailSig.length) {
+                const tailIdx = rem.indexOf(lastTailSig);
+                if (tailIdx >= 0) {
+                  const cut = tailIdx + lastTailSig.length;
+                  skippedBytes += cut;
+                  rem = rem.subarray(cut);
+                  skipping = false;
+                }
+              }
+              // Jalur 2: PTS matching frame-by-frame
+              if (skipping && lastVideoPts !== null) {
+                let foundContinuationAt = -1;
+                for (let p = 0; p + 188 <= rem.length; p += 188) {
+                  const pkt = rem.subarray(p, p + 188);
+                  const info = parsePts(pkt);
+                  if (info && info.isVideo) {
+                    const isContinuation = (info.pts > lastVideoPts && info.pts - lastVideoPts < 120) || (lastVideoPts - info.pts > 85000);
+                    if (isContinuation) {
+                      foundContinuationAt = p;
+                      break;
+                    }
+                  }
+                }
+                if (foundContinuationAt >= 0) {
+                  skippedBytes += foundContinuationAt;
+                  rem = rem.subarray(foundContinuationAt);
+                  skipping = false;
+                } else if (rem.length > 188 * 50) {
+                  const discard = rem.length - (188 * 20);
+                  skippedBytes += discard;
+                  rem = rem.subarray(discard);
+                }
+              }
+              // Safety valve: jika sudah buang > 30MB tapi belum ketemu, lepaskan skip
+              if (skipping && skippedBytes > 30 * 1024 * 1024) {
+                skipping = false;
+              }
+              if (skipping) continue;
+            }
+
+            // Kirim paket langsung kelipatan 188 byte tanpa ditunda-tunda
             const maxAligned = Math.floor(rem.length / 188) * 188;
             if (maxAligned > 0) {
               const outChunk = rem.subarray(0, maxAligned);
               rem = rem.subarray(maxAligned);
               bytesSent += outChunk.length;
+
+              // Catat PTS video & tail paket terakhir untuk referensi reconnect berikutnya
+              for (let p = 0; p < outChunk.length; p += 188) {
+                const pkt = outChunk.subarray(p, p + 188);
+                const info = parsePts(pkt);
+                if (info && info.isVideo) {
+                  lastVideoPts = info.pts;
+                }
+              }
+              if (outChunk.length >= 188 * 8) {
+                lastTailSig = outChunk.subarray(outChunk.length - 188 * 8);
+              }
+
               if (!outStream.destroyed && !outStream.write(outChunk)) {
                 await new Promise((r) => outStream.once('drain', r));
               }
@@ -1321,18 +1407,20 @@ async function handle(req, res) {
       let curAc = currentAc;
       let lastDirectTarget = target !== initialTarget ? target : (cachedDirect && cachedDirect.url ? cachedDirect.url : null);
       let consecutiveDrops = 0;
+      let sessionIndex = 0;
 
-      while (!clientClosed && consecutiveDrops < 6) {
-        const sent = await pumpTsAligned(curBody, curAc);
+      while (!clientClosed && consecutiveDrops < 8) {
+        const sent = await pumpTsAligned(curBody, curAc, sessionIndex > 0);
         if (clientClosed) break;
+        sessionIndex++;
         if (sent >= 188 * 20) consecutiveDrops = 0;
         else consecutiveDrops++;
 
-        await new Promise((r) => setTimeout(r, 350));
+        await new Promise((r) => setTimeout(r, 60));
         if (clientClosed) break;
 
         let reconnected = null;
-        // Utamakan URL media langsung (lastDirectTarget) terlebih dahulu agar play_token sekali-pakai tidak tertolak 511
+        // Utamakan URL media langsung (lastDirectTarget) terlebih dahulu, jika gagal langsung buang agar ke portal
         const targetsToTry = lastDirectTarget ? [lastDirectTarget, initialTarget] : [initialTarget];
         for (const tUrl of targetsToTry) {
           if (clientClosed) break;
@@ -1346,8 +1434,13 @@ async function handle(req, res) {
               }
               break;
             }
+            if (tUrl === lastDirectTarget) {
+              lastDirectTarget = null;
+            }
             if (att.res && att.res.body) { try { att.res.body.cancel(); } catch (e) {} }
-          } catch (e) {}
+          } catch (e) {
+            if (tUrl === lastDirectTarget) lastDirectTarget = null;
+          }
         }
         if (!reconnected || !reconnected.res || !reconnected.res.body) {
           consecutiveDrops++;

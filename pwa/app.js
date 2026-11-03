@@ -841,17 +841,10 @@ function healBufferGap() {
     if (!b || !b.length) return false;
     var cur = el.video.currentTime;
 
-    // Cek jika posisi playhead tertinggal jauh di belakang live edge (mengurangi delay & buffering siaran TV)
-    var lastEnd = b.end(b.length - 1);
-    if (lastEnd - cur > 12) {
-      el.video.currentTime = lastEnd - 3.5;
-      el.video.play().catch(function () {});
-      return true;
-    }
-
-    // Sambung celah buffer (buffer gap) di antara segmen
+    // Sambung celah buffer (buffer gap) jika playhead macet tepat di lubang kosong antar segmen
     if (b.length > 1) {
       var lastStart = b.start(b.length - 1);
+      var lastEnd = b.end(b.length - 1);
       if (lastEnd - lastStart > 0.2 && cur < lastStart - 0.05) {
         el.video.currentTime = lastStart + 0.1;
         el.video.play().catch(function () {});
@@ -1035,22 +1028,18 @@ function startTs(url, type, token) {
       {
         enableWorker: false,
         enableStashBuffer: true,
-        stashInitialSize: 256 * 1024,
+        stashInitialSize: 384 * 1024,
         isLive: true,
         lazyLoad: false,
         lazyLoadMaxDuration: 0,
         deferLoadAfterSourceOpen: false,
-        liveBufferLatencyChasing: true,
-        liveBufferLatencyMaxLatency: 4.0,
-        liveBufferLatencyMinRemain: 1.0,
-        liveSync: true,
-        liveSyncMaxLatency: 4.5,
-        liveSyncTargetLatency: 1.8,
+        liveBufferLatencyChasing: false,
+        liveSync: false,
         fixAudioTimestampGap: true,
         accurateSeek: false,
         autoCleanupSourceBuffer: true,
-        autoCleanupMaxBackwardDuration: 30,
-        autoCleanupMinBackwardDuration: 15
+        autoCleanupMaxBackwardDuration: 60,
+        autoCleanupMinBackwardDuration: 30
       }
     );
     E.ts = p; E.mode = 'mpegts';
