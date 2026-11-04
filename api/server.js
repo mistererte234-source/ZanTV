@@ -631,8 +631,108 @@ function parseUA(ua) {
   return { type, os, browser, model };
 }
 function clientIp(req) {
-  const local = /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(req.socket.remoteAddress || '');
-  return (local && req.headers['x-real-ip']) || req.socket.remoteAddress || '';
+  const forwarded = req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const raw = (req.socket && req.socket.remoteAddress) || '';
+  const local = /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(raw);
+  return (local && forwarded) ? forwarded : (forwarded || raw).replace(/^::ffff:/, '');
+}
+
+/* ---------------- Benteng Pertahanan Anti-Fake GPS (Anti-Spoofing Shield) ---------------- */
+const ipGeoCache = new Map();
+function isPrivateIp(ip) {
+  if (!ip) return true;
+  return /^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|fc00:|fe80:|::1|localhost)/i.test(ip);
+}
+
+async function lookupIpGeo(ip) {
+  if (!ip || isPrivateIp(ip)) return null;
+  const cached = ipGeoCache.get(ip);
+  if (cached && cached.exp > Date.now()) return cached.data;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 2200);
+    const res = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,countryCode,regionName,city,lat,lon,proxy,hosting`, { signal: ac.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && data.status === 'success') {
+      if (ipGeoCache.size > 500) ipGeoCache.clear();
+      ipGeoCache.set(ip, { data, exp: Date.now() + 6 * 3600 * 1000 });
+      return data;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function verifyGpsHeuristics(b) {
+  if (b.isMock) {
+    return { ok: false, code: 'mock_flagged', msg: 'Akses ditolak: Terdeteksi sinyal Fake GPS / Mock Location pada perangkat.' };
+  }
+  const acc = Math.round(+b.accuracy || 0);
+  if (acc <= 1) {
+    return { ok: false, code: 'fake_gps_zero_accuracy', msg: 'Akses ditolak: Parameter akurasi GPS tidak wajar (0–1 meter). Matikan aplikasi Fake GPS.' };
+  }
+  if (acc > 15000) {
+    return { ok: false, code: 'gps_unreliable', msg: 'Akses ditolak: Sinyal GPS terlalu lemah/tidak akurat (> 15 km). Pastikan GPS HP aktif.' };
+  }
+  if (b.gpsTs && b.clientTs) {
+    const drift = Math.abs(+b.clientTs - +b.gpsTs);
+    if (drift > 180000) {
+      return { ok: false, code: 'gps_timestamp_manipulation', msg: 'Akses ditolak: Sinyal waktu GPS tidak sinkron dengan jam sistem perangkat.' };
+    }
+  }
+  return { ok: true };
+}
+
+function checkTeleportation(lastLat, lastLng, lastAt, newLat, newLng) {
+  if (!lastLat || !lastLng || !lastAt) return { ok: true };
+  const timeSec = (Date.now() - lastAt) / 1000;
+  // Periksa pergerakan jika dalam kurun waktu 1 detik s/d 2 jam (7200s)
+  if (timeSec >= 1 && timeSec <= 7200) {
+    const distM = gpsDistanceMeters(lastLat, lastLng, newLat, newLng);
+    const speedKmH = (distM / timeSec) * 3.6;
+    // Lompatan jarak > 1.5 km dengan kecepatan instan > 400 km/jam
+    if (distM > 1500 && speedKmH > 400) {
+      return {
+        ok: false,
+        code: 'teleportation',
+        speed: Math.round(speedKmH),
+        dist: Math.round(distM),
+        msg: `Akses ditolak: Terdeteksi lompatan lokasi instan / teleportasi (${Math.round(speedKmH)} km/jam, jarak ${Math.round(distM / 1000)} km). Matikan Fake GPS!`
+      };
+    }
+  }
+  return { ok: true };
+}
+
+async function verifyIpVsGps(req, gpsLat, gpsLng) {
+  const ip = clientIp(req);
+  if (!ip || isPrivateIp(ip)) return { ok: true };
+  const geo = await lookupIpGeo(ip);
+  if (!geo) return { ok: true };
+
+  // 1. Deteksi Datacenter VPN luar negeri
+  if (geo.hosting && geo.countryCode !== 'ID') {
+    return {
+      ok: false,
+      code: 'vpn_hosting_detected',
+      msg: `Akses ditolak: Terdeteksi koneksi VPN/Proxy server luar (${geo.city || geo.country}). Matikan VPN untuk menggunakan ZanTV.`
+    };
+  }
+
+  // 2. Deteksi anomali jarak IP vs GPS (misal: GPS spoofed ke Jakarta, tapi IP koneksi dari luar negeri > 1.500 km)
+  if (geo.lat && geo.lon) {
+    const distM = gpsDistanceMeters(geo.lat, geo.lon, gpsLat, gpsLng);
+    if (distM > 1500000 && geo.countryCode !== 'ID') {
+      return {
+        ok: false,
+        code: 'ip_gps_discrepancy',
+        msg: `Akses ditolak: Lokasi GPS (${gpsLat}, ${gpsLng}) bertolak belakang dengan jaringan internet Anda (${geo.city}, ${geo.country}). Matikan Fake GPS/VPN.`
+      };
+    }
+  }
+
+  return { ok: true, geo };
 }
 function logEvent(req, user, type, data) {
   const ua = req.headers['user-agent'] || '';
@@ -766,9 +866,34 @@ async function handle(req, res) {
         logEvent(req, name, 'login_gps_missing', { reason: clip(b.gpsError || 'no_gps', 60) });
         throw fail(403, 'Akses ditolak: Wajib mengaktifkan & mengizinkan lokasi GPS pada browser/perangkat untuk masuk.');
       }
+
+      // Anti-Fake GPS Layer 1: Sinyal & Heuristik Akurasi
+      const heur = verifyGpsHeuristics(b);
+      if (!heur.ok) {
+        logEvent(req, name, 'login_fake_gps_heuristic', { code: heur.code, accuracy: acc, isMock: !!b.isMock });
+        throw fail(403, heur.msg);
+      }
+
+      // Anti-Fake GPS Layer 2: IP vs Geolocation Cross-Check
+      const ipGps = await verifyIpVsGps(req, +rawLat, +rawLng);
+      if (!ipGps.ok) {
+        logEvent(req, name, 'login_fake_gps_ip', { code: ipGps.code, lat: +rawLat, lng: +rawLng });
+        throw fail(403, ipGps.msg);
+      }
+
       const lat = +(+rawLat).toFixed(5), lng = +(+rawLng).toFixed(5);
       const match = findMatchingGps(user, lat, lng);
       if (match.item) {
+        // Anti-Fake GPS Layer 3: Anti-Teleportasi (Lompatan instan antar titik)
+        const prevLat = (user.lastGpsPing && user.lastGpsPing.lat) || match.item.lastLat;
+        const prevLng = (user.lastGpsPing && user.lastGpsPing.lng) || match.item.lastLng;
+        const prevAt = (user.lastGpsPing && user.lastGpsPing.at) || match.item.lastAt;
+        const tele = checkTeleportation(prevLat, prevLng, prevAt, lat, lng);
+        if (!tele.ok) {
+          logEvent(req, name, 'login_fake_gps_teleport', { speed: tele.speed, dist: tele.dist, prevLat, prevLng, lat, lng });
+          throw fail(403, tele.msg);
+        }
+
         matchedGps = match.item;
         matchedGps.lastLat = lat;
         matchedGps.lastLng = lng;
@@ -776,6 +901,7 @@ async function handle(req, res) {
         matchedGps.lastAt = Date.now();
         matchedGps.lastIp = clientIp(req);
         matchedGps.lastDevice = parseUA(req.headers['user-agent']);
+        user.lastGpsPing = { lat, lng, at: Date.now() };
         // Hapus dari pending jika sebelumnya ada di sekitar titik ini
         user.pendingGpsList = user.pendingGpsList.filter(
           (pItem) => !pItem || gpsDistanceMeters(pItem.lat, pItem.lng, lat, lng) > 250
@@ -801,6 +927,7 @@ async function handle(req, res) {
         };
         user.gpsList.push(newItem);
         user.gpsAutoBind = false;
+        user.lastGpsPing = { lat, lng, at: Date.now() };
         matchedGps = newItem;
         save();
         logEvent(req, name, 'location', { lat, lng, accuracy: acc, gpsLabel: newItem.label });
@@ -858,6 +985,23 @@ async function handle(req, res) {
         delete db.sessions[me.key]; presence.delete(me.key); save();
         throw fail(401, 'Sesi dihentikan karena izin GPS dimatikan pada perangkat/browser.');
       }
+
+      // Anti-Fake GPS Layer 1: Sinyal & Heuristik Akurasi
+      const heur = verifyGpsHeuristics(b);
+      if (!heur.ok) {
+        logEvent(req, me.name, 'login_fake_gps_heuristic', { code: heur.code, accuracy: acc, isMock: !!b.isMock });
+        delete db.sessions[me.key]; presence.delete(me.key); save();
+        throw fail(401, heur.msg);
+      }
+
+      // Anti-Fake GPS Layer 2: IP vs Geolocation Cross-Check
+      const ipGps = await verifyIpVsGps(req, +rawLat, +rawLng);
+      if (!ipGps.ok) {
+        logEvent(req, me.name, 'login_fake_gps_ip', { code: ipGps.code, lat: +rawLat, lng: +rawLng });
+        delete db.sessions[me.key]; presence.delete(me.key); save();
+        throw fail(401, ipGps.msg);
+      }
+
       const lat = +(+rawLat).toFixed(5), lng = +(+rawLng).toFixed(5);
       const match = findMatchingGps(u, lat, lng);
       if (!match.item) {
@@ -867,12 +1011,25 @@ async function handle(req, res) {
         logEvent(req, me.name, 'login_gps_mismatch', { lat, lng, accuracy: acc, dist: match.nearestDist, maxRadius });
         throw fail(401, `Sesi dihentikan: Lokasi GPS berada di luar area terdaftar (${match.nearestDist || 0} m > ${maxRadius} m).`);
       }
+
+      // Anti-Fake GPS Layer 3: Anti-Teleportasi
+      const prevLat = (u.lastGpsPing && u.lastGpsPing.lat) || match.item.lastLat;
+      const prevLng = (u.lastGpsPing && u.lastGpsPing.lng) || match.item.lastLng;
+      const prevAt = (u.lastGpsPing && u.lastGpsPing.at) || match.item.lastAt;
+      const tele = checkTeleportation(prevLat, prevLng, prevAt, lat, lng);
+      if (!tele.ok) {
+        logEvent(req, me.name, 'login_fake_gps_teleport', { speed: tele.speed, dist: tele.dist, prevLat, prevLng, lat, lng });
+        delete db.sessions[me.key]; presence.delete(me.key); save();
+        throw fail(401, tele.msg);
+      }
+
       match.item.lastLat = lat;
       match.item.lastLng = lng;
       match.item.lastAcc = acc;
       match.item.lastAt = Date.now();
       match.item.lastIp = clientIp(req);
       match.item.lastDevice = parseUA(req.headers['user-agent']);
+      u.lastGpsPing = { lat, lng, at: Date.now() };
       if (db.sessions[me.key]) db.sessions[me.key].gpsId = match.item.id;
       save();
       return send(res, 200, { ok: true, dist: match.dist, maxRadius: match.item.radius || 2000, label: match.item.label });

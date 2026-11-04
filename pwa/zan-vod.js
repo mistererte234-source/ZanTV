@@ -1,4 +1,4 @@
-/* ZanTV VOD & Short Drama Explorer v1.7.19
+/* ZanTV VOD & Short Drama Explorer v1.7.20
  * Agregator 42 Platform Short Drama (ShortMax, GoodShort, JoyReels, RaptDrama)
  * Desain iOS Glassmorphism Premium & Auto-Next Episode Player
  * Crafted with love by Lody for ZanTV.

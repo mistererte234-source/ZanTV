@@ -368,14 +368,31 @@ function getGpsPosition(timeoutMs) {
       done = true;
       resolve(res);
     }
+    function parsePos(pos) {
+      var c = (pos && pos.coords) || {};
+      var acc = Math.round(c.accuracy || 0);
+      var isMock = false;
+      // Heuristik Mock Location: akurasi 0-1m adalah artifak mock GPS
+      if (acc <= 1) isMock = true;
+      // Waktu GPS timestamp drift ekstrem dari jam lokal (> 2 menit)
+      if (pos && pos.timestamp && Math.abs(Date.now() - pos.timestamp) > 120000) isMock = true;
+      return {
+        lat: c.latitude,
+        lng: c.longitude,
+        accuracy: acc,
+        altitude: c.altitude != null ? Math.round(c.altitude) : null,
+        altitudeAccuracy: c.altitudeAccuracy != null ? Math.round(c.altitudeAccuracy) : null,
+        heading: c.heading != null && !isNaN(c.heading) ? Math.round(c.heading) : null,
+        speed: c.speed != null && !isNaN(c.speed) ? +(c.speed).toFixed(2) : null,
+        gpsTs: (pos && pos.timestamp) || Date.now(),
+        clientTs: Date.now(),
+        isMock: isMock,
+        error: null
+      };
+    }
     navigator.geolocation.getCurrentPosition(
       function (pos) {
-        finish({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: Math.round(pos.coords.accuracy || 0),
-          error: null
-        });
+        finish(parsePos(pos));
       },
       function (err) {
         if (err && err.code === 1) {
@@ -385,12 +402,7 @@ function getGpsPosition(timeoutMs) {
         // Fallback ke jaringan/Wi-Fi jika penguncian satelit presisi tinggi timeout di dalam ruangan
         navigator.geolocation.getCurrentPosition(
           function (pos2) {
-            finish({
-              lat: pos2.coords.latitude,
-              lng: pos2.coords.longitude,
-              accuracy: Math.round(pos2.coords.accuracy || 0),
-              error: null
-            });
+            finish(parsePos(pos2));
           },
           function (err2) {
             var codeMap = { 1: 'permission_denied', 2: 'position_unavailable', 3: 'timeout' };
@@ -418,6 +430,13 @@ function verifyActiveGps(manual) {
       lat: gps.lat,
       lng: gps.lng,
       accuracy: gps.accuracy,
+      altitude: gps.altitude,
+      altitudeAccuracy: gps.altitudeAccuracy,
+      heading: gps.heading,
+      speed: gps.speed,
+      gpsTs: gps.gpsTs,
+      clientTs: gps.clientTs || Date.now(),
+      isMock: gps.isMock,
       gpsError: gps.error
     }).then(function (res) {
       if (manual) {
@@ -3328,6 +3347,9 @@ var ACT_LABEL = {
   login_gps_unregistered: 'Ditolak: GPS belum terdaftar',
   login_gps_mismatch: 'Ditolak: GPS belum terdaftar',
   login_gps_missing: 'Ditolak: Tanpa izin GPS',
+  login_fake_gps_heuristic: '🚨 Ditolak: Fake GPS (Akurasi/Mock)',
+  login_fake_gps_ip: '🚨 Ditolak: Fake GPS (VPN/IP)',
+  login_fake_gps_teleport: '🚨 Ditolak: Fake GPS (Teleportasi)',
   logout: 'Keluar',
   watch: 'Menonton',
   play_error: 'Gagal memutar',
@@ -3358,6 +3380,15 @@ function actDetail(e) {
   }
   if (e.type === 'login_gps_missing') {
     return '<small>Perangkat menolak / mematikan akses GPS (' + esc(e.reason || 'no_gps') + ')</small>';
+  }
+  if (e.type === 'login_fake_gps_heuristic') {
+    return '<span style="color:#ff453a;font-weight:600">Terdeteksi Fake GPS (' + esc(e.code || 'heuristik') + ')</span><small>Akurasi: ' + (e.accuracy || 0) + ' m' + (e.isMock ? ' · isMock: true' : '') + '</small>';
+  }
+  if (e.type === 'login_fake_gps_ip') {
+    return '<span style="color:#ff453a;font-weight:600">Terdeteksi VPN/IP Mismatch (' + esc(e.code || 'ip_geo') + ')</span><small>Koordinat: ' + (e.lat != null ? e.lat + ', ' + e.lng : '-') + '</small>';
+  }
+  if (e.type === 'login_fake_gps_teleport') {
+    return '<span style="color:#ff453a;font-weight:600">Terdeteksi Teleportasi Instan (' + (e.speed || 0) + ' km/jam)</span><small>Lompatan ' + Math.round((e.dist || 0) / 1000) + ' km</small>';
   }
   return '';
 }
@@ -3468,6 +3499,13 @@ $('#loginForm').addEventListener('submit', function (e) {
       lat: gps.lat,
       lng: gps.lng,
       accuracy: gps.accuracy,
+      altitude: gps.altitude,
+      altitudeAccuracy: gps.altitudeAccuracy,
+      heading: gps.heading,
+      speed: gps.speed,
+      gpsTs: gps.gpsTs,
+      clientTs: gps.clientTs || Date.now(),
+      isMock: gps.isMock,
       gpsError: gps.error
     });
   }).then(function (u) {
