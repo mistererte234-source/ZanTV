@@ -888,6 +888,7 @@ el.list.addEventListener('error', function (e) {
 var LIBS = {
   hls: 'vendor/hls-1.7.3.min.js',
   dash: 'vendor/dash-5.2.1.all.min.js',
+  shaka: 'vendor/shaka-player.compiled.js',
   mpegts: 'vendor/mpegts-1.8.2.js'
 };
 var libPromises = {};
@@ -904,7 +905,7 @@ function loadLib(name) {
   return libPromises[name];
 }
 
-var E = { token: 0, retries: 0, hasPlayed: false, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false, serverTranscode: false, probeAc: null };
+var E = { token: 0, retries: 0, hasPlayed: false, mode: null, hls: null, dash: null, shaka: null, ts: null, stall: null, tsFallback: false, nativeFallback: false, serverTranscode: false, probeAc: null };
 var savedQualMode = LS.get('qual-mode', 'auto');
 if (savedQualMode === 'server') savedQualMode = 'target';
 var QUAL = {
@@ -928,6 +929,7 @@ function destroyEngine() {
   QUAL.activeHeight = 0;
   QUAL.clientScaledH = 0;
   if (E.hls) { try { E.hls.destroy(); } catch (e) {} E.hls = null; }
+  if (E.shaka) { try { E.shaka.destroy(); } catch (e) {} E.shaka = null; }
   if (E.dash) { try { E.dash.reset(); } catch (e) {} E.dash = null; }
   if (E.ts) { try { E.ts.pause(); E.ts.unload(); E.ts.detachMediaElement(); E.ts.destroy(); } catch (e) {} E.ts = null; }
   E.mode = null;
@@ -1316,6 +1318,133 @@ function startDash(url, token, ch, currentClearKeys) {
   });
 }
 
+function startShaka(url, token, ch, currentClearKeys) {
+  return loadLib('shaka').then(function () {
+    if (token !== E.token) return;
+    if (typeof shaka === 'undefined') throw { kind: 'lib' };
+    shaka.polyfill.installAll();
+    if (!shaka.Player.isBrowserSupported()) {
+      throw { kind: 'unsupported', detail: 'Browser tidak mendukung EME Shaka' };
+    }
+    var p = new shaka.Player(el.video);
+    E.shaka = p;
+    E.mode = 'shaka';
+
+    var cfg = {
+      streaming: {
+        bufferingGoal: 15,
+        rebufferingGoal: 2,
+        bufferBehind: 30,
+        retryParameters: {
+          maxAttempts: 8,
+          baseDelay: 500,
+          backoffFactor: 1.4,
+          timeout: 10000
+        },
+        inaccurateManifestTolerance: 0,
+        safeSeekOffset: 8
+      },
+      manifest: {
+        retryParameters: {
+          maxAttempts: 8,
+          baseDelay: 500,
+          backoffFactor: 1.4,
+          timeout: 8000
+        },
+        dash: {
+          autoCorrectDrift: true,
+          ignoreMinBufferTime: true
+        }
+      },
+      abr: {
+        enabled: true,
+        defaultBandwidthEstimate: 3000000,
+        switchInterval: 4
+      }
+    };
+
+    var keys = currentClearKeys || (ch && ch.clearKeys);
+    if (keys) {
+      var clearKeysObj = {};
+      Object.keys(keys).forEach(function (rawKid) {
+        var rawKey = keys[rawKid];
+        var cleanKid = String(rawKid).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+        var cleanKey = String(rawKey).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+        if (cleanKid.length === 32 && cleanKey.length === 32) {
+          clearKeysObj[cleanKid] = cleanKey;
+        }
+      });
+      if (Object.keys(clearKeysObj).length) {
+        cfg.drm = {
+          clearKeys: clearKeysObj
+        };
+      }
+    }
+
+    p.configure(cfg);
+
+    p.addEventListener('error', function (e) {
+      if (token !== E.token) return;
+      var detail = e && e.detail;
+      var code = (detail && detail.code) || 0;
+      var isDrm = (detail && detail.category === 6); // shaka.util.Error.Category.DRM
+      if (code === 1002 || (code >= 6000 && !isDrm)) return;
+      fail({ kind: isDrm ? 'drm' : 'network', code: code, detail: (detail && detail.message) || String(code) }, token);
+    });
+
+    p.addEventListener('adaptation', function () {
+      if (token !== E.token) return;
+      try {
+        var tracks = p.getVariantTracks() || [];
+        var active = tracks.find(function (t) { return t.active; });
+        if (active && active.height) {
+          QUAL.activeHeight = active.height;
+          updateQualBadge();
+        }
+      } catch (err) {}
+    });
+
+    return p.load(url).then(function () {
+      if (token !== E.token) return;
+      try {
+        var tracks = p.getVariantTracks() || [];
+        QUAL.levels = tracks.filter(function (t) { return t.type === 'variant' && t.height; }).map(function (t, idx) {
+          return { index: idx, id: t.id, height: t.height || 0, width: t.width || 0, bitrate: t.bandwidth || 0 };
+        });
+        applyShakaQuality(p);
+      } catch (err) {}
+      updateQualBadge();
+      renderQualMenu();
+      bindVideoTextTracks();
+      syncCcEngine();
+    });
+  });
+}
+
+function applyShakaQuality(p) {
+  if (!p) return;
+  try {
+    if (QUAL.mode === 'auto') {
+      p.configure({ abr: { enabled: true } });
+      applyClientEcoMode(0);
+    } else if (QUAL.mode === 'manual' && QUAL.level >= 0) {
+      p.configure({ abr: { enabled: false } });
+      var tracks = p.getVariantTracks() || [];
+      var targetTrack = tracks[QUAL.level];
+      if (targetTrack) p.selectVariantTrack(targetTrack, false);
+    } else if (QUAL.mode === 'target' || QUAL.mode === 'saver') {
+      var maxH = QUAL.mode === 'saver' ? 480 : (QUAL.targetH || 720);
+      p.configure({
+        abr: {
+          enabled: true,
+          restrictions: { maxHeight: maxH }
+        }
+      });
+      applyClientEcoMode(maxH);
+    }
+  } catch (e) {}
+}
+
 function startTs(url, type, token) {
   return loadLib('mpegts').then(function () {
     if (token !== E.token) return;
@@ -1433,7 +1562,12 @@ function play(ch, opts) {
   var start;
   if (kind === 'unsupported') start = Promise.reject({ kind: 'unsupported' });
   else if (kind === 'hls') start = startHls(url, token);
-  else if (kind === 'dash') start = startDash(url, token, ch, currentClearKeys);
+  else if (kind === 'dash') {
+    start = startShaka(url, token, ch, currentClearKeys).catch(function (e) {
+      if (token !== E.token) throw e;
+      return startDash(url, token, ch, currentClearKeys);
+    });
+  }
   else if (kind === 'flv' || kind === 'mpegts') start = startTs(url, kind, token);
   else { startNative(url); start = Promise.resolve(); }
 
@@ -1823,6 +1957,8 @@ function selectQualityOption(qmode, level, sq) {
   // Terapkan langsung pada player yang sedang berjalan (TANPA membuka koneksi kedua / memutus sesi stream!)
   if (E.hls) {
     applyHlsQuality(E.hls);
+  } else if (E.shaka) {
+    applyShakaQuality(E.shaka);
   } else if (E.dash) {
     applyDashQuality(E.dash);
   } else {
