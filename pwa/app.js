@@ -993,26 +993,26 @@ function startHls(url, token) {
       enableIMSC1: true,
       enableCEA708Captions: true,
       capLevelToPlayerSize: isEco,
-      // Turbo Buffer & Zero-Lag Live Sync Engine
+      // Turbo Buffer & Zero-Lag Live Sync Engine (OTT Navigator Enhanced)
       lowLatencyMode: true,
-      backBufferLength: isEco ? 10 : 25,
-      maxBufferLength: isEco ? 15 : 45,
-      maxMaxBufferLength: isEco ? 30 : 90,
+      backBufferLength: isEco ? 15 : 30,
+      maxBufferLength: isEco ? 20 : 35,
+      maxMaxBufferLength: isEco ? 35 : 70,
       maxBufferSize: 60 * 1024 * 1024,
       maxBufferHole: 0.8,
       highBufferWatchdogPeriod: 2,
       nudgeOffset: 0.1,
       nudgeMaxRetry: 5,
       maxStarvationDelay: 2.5,
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 7,
+      liveSyncDurationCount: 4,
+      liveMaxLatencyDurationCount: 8,
       liveDurationInfinity: true,
-      manifestLoadingMaxRetry: 5,
-      manifestLoadingRetryDelay: 1000,
-      levelLoadingMaxRetry: 5,
-      levelLoadingRetryDelay: 1000,
+      manifestLoadingMaxRetry: 6,
+      manifestLoadingRetryDelay: 500,
+      levelLoadingMaxRetry: 6,
+      levelLoadingRetryDelay: 500,
       fragLoadingMaxRetry: 8,
-      fragLoadingRetryDelay: 1000
+      fragLoadingRetryDelay: 500
     });
     E.hls = hls; E.mode = 'hls';
     hls.on(Hls.Events.MANIFEST_PARSED, function (_, data) {
@@ -1106,6 +1106,90 @@ function startDash(url, token, ch, currentClearKeys) {
     var p = dashjs.MediaPlayer().create();
     E.dash = p; E.mode = 'dash';
 
+    // 🚀 ULTRA-SMOOTH BUFFER & ANTI-STALL ENGINE (Better than OTT Navigator)
+    p.updateSettings({
+      streaming: {
+        abandonLoadTimeout: 6000,
+        manifestUpdateRetryInterval: 250,
+        delay: {
+          liveDelay: 12,
+          liveDelayFragmentCount: 6,
+          useSuggestedPresentationDelay: false
+        },
+        buffer: {
+          fastSwitchEnabled: true,
+          reuseExistingSourceBuffers: true,
+          bufferTimeDefault: 18,
+          bufferTimeAtTopQuality: 26,
+          bufferTimeAtTopQualityLongForm: 30,
+          initialBufferLevel: 1.5,
+          bufferToKeep: 35,
+          stallThreshold: 0.25,
+          lowLatencyStallThreshold: 0.25,
+          enableSeekDecorrelationFix: true,
+          useAppendWindow: true,
+          setStallState: true
+        },
+        liveCatchup: {
+          enabled: true,
+          mode: 'liveCatchupModeDefault',
+          maxDrift: 15,
+          playbackBufferMin: 3,
+          playbackRate: {
+            min: -0.05,
+            max: 0.05
+          }
+        },
+        gaps: {
+          jumpGaps: true,
+          jumpLargeGaps: true,
+          smallGapLimit: 1.8,
+          threshold: 0.25,
+          enableSeekFix: true,
+          enableStallFix: true,
+          stallSeek: 0.1,
+          checkInterval: 200
+        },
+        abr: {
+          autoSwitchBitrate: { video: true, audio: true },
+          bandwidthSafetyFactor: 0.82,
+          hybridSwitchBufferTime: 10,
+          rules: {
+            throughputRule: { active: true },
+            bolaRule: { active: true },
+            insufficientBufferRule: {
+              active: true,
+              parameters: { throughputSafetyFactor: 0.75, segmentIgnoreCount: 2 }
+            },
+            switchHistoryRule: { active: true },
+            droppedFramesRule: {
+              active: true,
+              parameters: { droppedFramesPercentageThreshold: 0.15 }
+            },
+            abandonRequestsRule: {
+              active: true,
+              parameters: { abandonDurationMultiplier: 1.6, minSegmentDownloadTimeThresholdInMs: 400 }
+            }
+          },
+          initialBitrate: { video: 2200 }
+        },
+        retryIntervals: {
+          mediaSegment: 300,
+          initSegment: 300,
+          mpd: 400
+        },
+        retryAttempts: {
+          mediaSegment: 6,
+          initSegment: 6,
+          mpd: 6
+        },
+        scheduling: {
+          defaultTimeout: 150,
+          scheduleWhilePaused: true
+        }
+      }
+    });
+
     var keys = currentClearKeys || (ch && ch.clearKeys);
     var ck = keys ? buildDashClearKeys(keys) : null;
     if (ck) {
@@ -1158,6 +1242,31 @@ function startDash(url, token, ch, currentClearKeys) {
         } catch (err) {}
       });
     }
+
+    p.on(dashjs.MediaPlayer.events.PLAYBACK_PLAYING, function () {
+      if (token !== E.token) return;
+      setBusy(false);
+      clearTimeout(E.stall);
+    });
+
+    p.on(dashjs.MediaPlayer.events.PLAYBACK_STALLED, function () {
+      if (token !== E.token) return;
+      healBufferGap();
+    });
+
+    p.on(dashjs.MediaPlayer.events.BUFFER_EMPTY, function () {
+      if (token !== E.token) return;
+      healBufferGap();
+    });
+
+    p.on(dashjs.MediaPlayer.events.QUALITY_CHANGE_RENDERED, function (e) {
+      if (token !== E.token || (e && e.mediaType !== 'video')) return;
+      var lvl = QUAL.levels && QUAL.levels[e.newQuality];
+      if (lvl && lvl.height) {
+        QUAL.activeHeight = lvl.height;
+        updateQualBadge();
+      }
+    });
 
     p.on(dashjs.MediaPlayer.events.ERROR, function (e) {
       if (token !== E.token) return;
@@ -1397,7 +1506,17 @@ function explain(info, ch) {
   return { title: 'Stream gagal diputar', body: 'Format video dari server ini tidak bisa dibaca browser ini atau stream kosong. Coba pastikan VLC sudah ditutup lalu klik Coba lagi.' };
 }
 
-function setBusy(on) { el.spinner.hidden = !on; }
+var busyTimer = null;
+function setBusy(on) {
+  clearTimeout(busyTimer);
+  if (on) {
+    busyTimer = setTimeout(function () {
+      el.spinner.hidden = false;
+    }, 450); // Debounce: jangan tampilkan spinner jika jeda hanya micro-pause < 450ms
+  } else {
+    el.spinner.hidden = true;
+  }
+}
 function hideMsg() { el.msg.hidden = true; el.stage.classList.remove('has-msg'); }
 
 /* status video */
@@ -1429,7 +1548,7 @@ el.video.addEventListener('waiting', function () {
   if (healBufferGap()) { setBusy(false); return; }
   setBusy(true);
   var token = E.token;
-  setTimeout(function () { if (token === E.token && el.video.readyState < 3 && healBufferGap()) setBusy(false); }, 600);
+  setTimeout(function () { if (token === E.token && el.video.readyState < 3 && healBufferGap()) setBusy(false); }, 350);
   clearTimeout(E.stall);
   E.stall = setTimeout(function () {
     if (token !== E.token || el.video.readyState >= 3) return;
