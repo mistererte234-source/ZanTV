@@ -146,9 +146,71 @@ function buildDashClearKeys(clearKeys) {
     if (kidB64 && keyB64) {
       out[kidB64] = keyB64;
     }
+    if (kidClean && keyB64) {
+      out[kidClean.toLowerCase()] = keyB64;
+      out[kidClean.toUpperCase()] = keyB64;
+    }
   });
   return Object.keys(out).length ? out : null;
 }
+
+function injectClearKeyToXml(xmlStr, keys) {
+  if (!xmlStr || typeof xmlStr !== 'string' || xmlStr.indexOf('<MPD') === -1) return xmlStr;
+  var defKid = null;
+  if (keys) {
+    var kList = Object.keys(keys);
+    if (kList.length) defKid = kList[0];
+  }
+  var kidMatch = xmlStr.match(/cenc:default_KID="([^"]+)"/i);
+  if (kidMatch) defKid = kidMatch[1];
+  if (!defKid) return xmlStr;
+
+  var injected = xmlStr;
+  if (injected.indexOf('1077efec') === -1) {
+    injected = injected.replace(/(<ContentProtection[^>]+cenc:default_KID="([^"]+)"[^>]*\/>)/gi, function (match, full, kid) {
+      return full +
+        '\n        <ContentProtection schemeIdUri="urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b" value="ClearKey" cenc:default_KID="' + kid + '"/>' +
+        '\n        <ContentProtection schemeIdUri="urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e" value="ClearKey" cenc:default_KID="' + kid + '"/>';
+    });
+    injected = injected.replace(/(<AdaptationSet[^>]*>)/gi, function (match) {
+      return match +
+        '\n    <ContentProtection schemeIdUri="urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b" value="ClearKey" cenc:default_KID="' + defKid + '"/>' +
+        '\n    <ContentProtection schemeIdUri="urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e" value="ClearKey" cenc:default_KID="' + defKid + '"/>';
+    });
+  }
+  return injected;
+}
+
+(function hookDashXhrManifest() {
+  if (typeof window === 'undefined' || !window.XMLHttpRequest) return;
+  var origOpen = XMLHttpRequest.prototype.open;
+  var origSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this._reqUrl = url ? String(url) : '';
+    return origOpen.apply(this, arguments);
+  };
+
+  XMLHttpRequest.prototype.send = function () {
+    var self = this;
+    if (self._reqUrl && (self._reqUrl.indexOf('.mpd') !== -1 || self._reqUrl.indexOf('format=mpd') !== -1)) {
+      self.addEventListener('readystatechange', function () {
+        if (self.readyState === 4 && self.status >= 200 && self.status < 300) {
+          try {
+            var raw = self.responseText;
+            if (raw && raw.indexOf('<MPD') !== -1) {
+              var keys = (S.playing && (S.playing.clearKeys || (S.playing.sources && S.playing.sources[S.playing._sourceIndex || 0] && S.playing.sources[S.playing._sourceIndex || 0].clearKeys)));
+              var modified = injectClearKeyToXml(raw, keys);
+              Object.defineProperty(self, 'responseText', { value: modified, configurable: true });
+              Object.defineProperty(self, 'response', { value: modified, configurable: true });
+            }
+          } catch (e) {}
+        }
+      });
+    }
+    return origSend.apply(this, arguments);
+  };
+})();
 
 function parseM3U(text, pl) {
   var lines = String(text).replace(/\r/g, '').split('\n');
@@ -232,6 +294,8 @@ function parseM3U(text, pl) {
         });
       }
       if (!/^(https?|rtmp|rtsp|udp|file):|^\/\//i.test(url)) { continue; }
+      // Filter link expired / billing loop IPTV Rusia (otttv.pw) agar tidak mencemari daftar stream
+      if (/otttv\.pw\/iptv\/HEGN4VXXQQSYCA/i.test(url)) { continue; }
       var finalUa = lineUa || defUa || '';
       var finalRef = lineRef || defRef || '';
       var finalOrg = lineOrg || '';
@@ -1109,79 +1173,60 @@ function startDash(url, token, ch, currentClearKeys) {
     // 🚀 ULTRA-SMOOTH BUFFER & ANTI-STALL ENGINE (Better than OTT Navigator)
     p.updateSettings({
       streaming: {
-        abandonLoadTimeout: 6000,
-        manifestUpdateRetryInterval: 250,
+        abandonLoadTimeout: 10000,
+        manifestUpdateRetryInterval: 500,
         delay: {
           liveDelay: 12,
-          liveDelayFragmentCount: 6,
           useSuggestedPresentationDelay: false
         },
         buffer: {
-          fastSwitchEnabled: true,
+          fastSwitchEnabled: false,
           reuseExistingSourceBuffers: true,
-          bufferTimeDefault: 18,
-          bufferTimeAtTopQuality: 26,
-          bufferTimeAtTopQualityLongForm: 30,
+          bufferTimeDefault: 14,
+          bufferTimeAtTopQuality: 20,
+          bufferTimeAtTopQualityLongForm: 24,
           initialBufferLevel: 1.5,
-          bufferToKeep: 35,
-          stallThreshold: 0.25,
-          lowLatencyStallThreshold: 0.25,
+          bufferToKeep: 30,
+          stallThreshold: 0.35,
           enableSeekDecorrelationFix: true,
           useAppendWindow: true,
           setStallState: true
         },
         liveCatchup: {
-          enabled: true,
-          mode: 'liveCatchupModeDefault',
-          maxDrift: 15,
-          playbackBufferMin: 3,
-          playbackRate: {
-            min: -0.05,
-            max: 0.05
-          }
+          enabled: false
         },
         gaps: {
           jumpGaps: true,
           jumpLargeGaps: true,
           smallGapLimit: 1.8,
-          threshold: 0.25,
+          threshold: 0.3,
           enableSeekFix: true,
           enableStallFix: true,
           stallSeek: 0.1,
-          checkInterval: 200
+          checkInterval: 250
         },
         abr: {
           autoSwitchBitrate: { video: true, audio: true },
           bandwidthSafetyFactor: 0.82,
-          hybridSwitchBufferTime: 10,
           rules: {
             throughputRule: { active: true },
             bolaRule: { active: true },
-            insufficientBufferRule: {
-              active: true,
-              parameters: { throughputSafetyFactor: 0.75, segmentIgnoreCount: 2 }
-            },
+            insufficientBufferRule: { active: true },
             switchHistoryRule: { active: true },
-            droppedFramesRule: {
-              active: true,
-              parameters: { droppedFramesPercentageThreshold: 0.15 }
-            },
-            abandonRequestsRule: {
-              active: true,
-              parameters: { abandonDurationMultiplier: 1.6, minSegmentDownloadTimeThresholdInMs: 400 }
-            }
+            droppedFramesRule: { active: false },
+            abandonRequestsRule: { active: false }
           },
           initialBitrate: { video: 2200 }
         },
         retryIntervals: {
-          mediaSegment: 300,
-          initSegment: 300,
-          mpd: 400
+          mediaSegment: 400,
+          initSegment: 400,
+          mpd: 500
         },
         retryAttempts: {
-          mediaSegment: 6,
-          initSegment: 6,
-          mpd: 6
+          mediaSegment: 8,
+          initSegment: 8,
+          mpd: 8
         },
         scheduling: {
           defaultTimeout: 150,
@@ -1199,6 +1244,10 @@ function startDash(url, token, ch, currentClearKeys) {
           priority: 0
         },
         '1077efec-c0b2-4d02-ace3-3c1e52e2fb4b': {
+          clearkeys: ck,
+          priority: 0
+        },
+        'e2719d58-a985-b3c9-781a-b030af78d30e': {
           clearkeys: ck,
           priority: 0
         }
@@ -1228,8 +1277,12 @@ function startDash(url, token, ch, currentClearKeys) {
 
               var targets = [as].concat(reps);
               targets.forEach(function (t) {
-                if (!t.ContentProtection) t.ContentProtection = [];
-                var cpList = Array.isArray(t.ContentProtection) ? t.ContentProtection : [t.ContentProtection];
+                if (!t.ContentProtection) {
+                  t.ContentProtection = [];
+                } else if (!Array.isArray(t.ContentProtection)) {
+                  t.ContentProtection = [t.ContentProtection];
+                }
+                var cpList = t.ContentProtection;
                 var hasClearKey = cpList.some(function (cp) {
                   var uri = String((cp && cp.schemeIdUri) || '').toLowerCase();
                   return uri.includes('1077efec') || uri.includes('e2719d58') || uri.includes('clearkey');
@@ -1238,11 +1291,13 @@ function startDash(url, token, ch, currentClearKeys) {
                   t.ContentProtection.unshift({
                     schemeIdUri: 'urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b',
                     value: 'ClearKey',
+                    'cenc:default_KID': defKid,
                     cencDefaultKid: defKid
                   });
                   t.ContentProtection.unshift({
-                    schemeIdUri: 'urn:uuid:e2719d58-a985-b3c9-781a-b030e4d41fa6',
+                    schemeIdUri: 'urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e',
                     value: 'ClearKey',
+                    'cenc:default_KID': defKid,
                     cencDefaultKid: defKid
                   });
                 }
@@ -1389,7 +1444,7 @@ function play(ch, opts) {
   el.stage.classList.add('is-playing');
   destroyEngine();
 
-  var srcIdx = (typeof opts.sourceIndex === 'number') ? opts.sourceIndex : (ch._sourceIndex || 0);
+  var srcIdx = (typeof opts.sourceIndex === 'number') ? opts.sourceIndex : (opts.retry ? (ch._sourceIndex || 0) : 0);
   if (!ch.sources || !ch.sources.length) {
     ch.sources = [{
       url: ch.url,
@@ -1485,8 +1540,9 @@ function fail(info, token) {
 
   // Multi-source fallback jika channel punya alternatif server / mirror stream
   // JANGAN otomatis pindah ke server backup jika stream saat ini SUDAH PERNAH JALAN (E.hasPlayed === true)
-  // karena server cadangan seringkali link mati/expired (misal otttv.pw Rusia). Prioritaskan reconnect stream utama!
-  if (!E.hasPlayed && S.playing && S.playing.sources && S.playing.sources.length > 1) {
+  // atau jika stream adalah DASH ber-ClearKey (karena server cadangan seringkali link mati/expired). Prioritaskan reconnect stream utama!
+  var isDashOrDrm = (S.playing && (S.playing.clearKeys || kindOf(S.playing.url) === 'dash'));
+  if (!isDashOrDrm && !E.hasPlayed && S.playing && S.playing.sources && S.playing.sources.length > 1) {
     var curIdx = S.playing._sourceIndex || 0;
     if (curIdx + 1 < S.playing.sources.length) {
       var nextIdx = curIdx + 1;
