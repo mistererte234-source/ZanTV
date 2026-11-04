@@ -154,63 +154,6 @@ function buildDashClearKeys(clearKeys) {
   return Object.keys(out).length ? out : null;
 }
 
-function injectClearKeyToXml(xmlStr, keys) {
-  if (!xmlStr || typeof xmlStr !== 'string' || xmlStr.indexOf('<MPD') === -1) return xmlStr;
-  var defKid = null;
-  if (keys) {
-    var kList = Object.keys(keys);
-    if (kList.length) defKid = kList[0];
-  }
-  var kidMatch = xmlStr.match(/cenc:default_KID="([^"]+)"/i);
-  if (kidMatch) defKid = kidMatch[1];
-  if (!defKid) return xmlStr;
-
-  var injected = xmlStr;
-  if (injected.indexOf('1077efec') === -1) {
-    injected = injected.replace(/(<ContentProtection[^>]+cenc:default_KID="([^"]+)"[^>]*\/>)/gi, function (match, full, kid) {
-      return full +
-        '\n        <ContentProtection schemeIdUri="urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b" value="ClearKey" cenc:default_KID="' + kid + '"/>' +
-        '\n        <ContentProtection schemeIdUri="urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e" value="ClearKey" cenc:default_KID="' + kid + '"/>';
-    });
-    injected = injected.replace(/(<AdaptationSet[^>]*>)/gi, function (match) {
-      return match +
-        '\n    <ContentProtection schemeIdUri="urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b" value="ClearKey" cenc:default_KID="' + defKid + '"/>' +
-        '\n    <ContentProtection schemeIdUri="urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e" value="ClearKey" cenc:default_KID="' + defKid + '"/>';
-    });
-  }
-  return injected;
-}
-
-(function hookDashXhrManifest() {
-  if (typeof window === 'undefined' || !window.XMLHttpRequest) return;
-  var origOpen = XMLHttpRequest.prototype.open;
-  var origSend = XMLHttpRequest.prototype.send;
-
-  XMLHttpRequest.prototype.open = function (method, url) {
-    this._reqUrl = url ? String(url) : '';
-    return origOpen.apply(this, arguments);
-  };
-
-  XMLHttpRequest.prototype.send = function () {
-    var self = this;
-    if (self._reqUrl && (self._reqUrl.indexOf('.mpd') !== -1 || self._reqUrl.indexOf('format=mpd') !== -1)) {
-      self.addEventListener('readystatechange', function () {
-        if (self.readyState === 4 && self.status >= 200 && self.status < 300) {
-          try {
-            var raw = self.responseText;
-            if (raw && raw.indexOf('<MPD') !== -1) {
-              var keys = (S.playing && (S.playing.clearKeys || (S.playing.sources && S.playing.sources[S.playing._sourceIndex || 0] && S.playing.sources[S.playing._sourceIndex || 0].clearKeys)));
-              var modified = injectClearKeyToXml(raw, keys);
-              Object.defineProperty(self, 'responseText', { value: modified, configurable: true });
-              Object.defineProperty(self, 'response', { value: modified, configurable: true });
-            }
-          } catch (e) {}
-        }
-      });
-    }
-    return origSend.apply(this, arguments);
-  };
-})();
 
 function parseM3U(text, pl) {
   var lines = String(text).replace(/\r/g, '').split('\n');
@@ -1275,32 +1218,31 @@ function startDash(url, token, ch, currentClearKeys) {
                 }
               });
 
-              var targets = [as].concat(reps);
-              targets.forEach(function (t) {
-                if (!t.ContentProtection) {
-                  t.ContentProtection = [];
-                } else if (!Array.isArray(t.ContentProtection)) {
-                  t.ContentProtection = [t.ContentProtection];
+              // Bersihkan Widevine & PlayReady, gantikan dengan ClearKey & CENC (persis seperti ExoPlayer di OTT Navigator memaksa CLEARKEY_UUID)
+              var cleanCps = [
+                {
+                  schemeIdUri: 'urn:mpeg:dash:mp4protection:2011',
+                  value: 'cenc',
+                  'cenc:default_KID': defKid,
+                  cencDefaultKid: defKid
+                },
+                {
+                  schemeIdUri: 'urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b',
+                  value: 'ClearKey',
+                  'cenc:default_KID': defKid,
+                  cencDefaultKid: defKid
+                },
+                {
+                  schemeIdUri: 'urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e',
+                  value: 'ClearKey',
+                  'cenc:default_KID': defKid,
+                  cencDefaultKid: defKid
                 }
-                var cpList = t.ContentProtection;
-                var hasClearKey = cpList.some(function (cp) {
-                  var uri = String((cp && cp.schemeIdUri) || '').toLowerCase();
-                  return uri.includes('1077efec') || uri.includes('e2719d58') || uri.includes('clearkey');
-                });
-                if (!hasClearKey) {
-                  t.ContentProtection.unshift({
-                    schemeIdUri: 'urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b',
-                    value: 'ClearKey',
-                    'cenc:default_KID': defKid,
-                    cencDefaultKid: defKid
-                  });
-                  t.ContentProtection.unshift({
-                    schemeIdUri: 'urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e',
-                    value: 'ClearKey',
-                    'cenc:default_KID': defKid,
-                    cencDefaultKid: defKid
-                  });
-                }
+              ];
+
+              as.ContentProtection = cleanCps.slice();
+              reps.forEach(function (r) {
+                r.ContentProtection = cleanCps.slice();
               });
             });
           });
@@ -1346,10 +1288,11 @@ function startDash(url, token, ch, currentClearKeys) {
     p.on(dashjs.MediaPlayer.events.ERROR, function (e) {
       if (token !== E.token) return;
       var err = e && e.error ? e.error : e;
+      var code = (err && (err.code || (err.error && err.error.code))) || 0;
       var msg = String((err && (err.message || err.code)) || '');
       var drm = /protect|key ?system|licen|drm|eme|encrypt/i.test(msg);
-      // Jika video sudah pernah jalan, jangan putus pada error download segmen tunggal (biarkan dash.js retry internal)
-      if (E.hasPlayed && !drm && (err && (err.code === 27 || err.code === 25 || /download|fragment/i.test(msg)))) {
+      // Jangan fail pada error fragment/segment download karena Dash.js punya retryAttempts internal (8x)
+      if (!drm && (code === 27 || code === 25 || /download|fragment|segment/i.test(msg))) {
         return;
       }
       fail({ kind: drm ? 'drm' : 'network', detail: msg }, token);
