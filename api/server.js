@@ -974,6 +974,285 @@ async function handle(req, res) {
     return send(res, 200, out);
   }
 
+  /* ---------------- VOD / Short Drama Aggregator & Cache ---------------- */
+  const vodCache = global.__vodCache || (global.__vodCache = new Map());
+  function getVodCache(key) {
+    const item = vodCache.get(key);
+    if (item && item.exp > Date.now()) return item.data;
+    vodCache.delete(key);
+    return null;
+  }
+  function setVodCache(key, data, ttlMs) {
+    if (vodCache.size > 300) vodCache.clear();
+    vodCache.set(key, { data, exp: Date.now() + (ttlMs || 900000) });
+  }
+  async function fetchVodJson(upstreamUrl) {
+    const r = await fetch(upstreamUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+      }
+    });
+    if (!r.ok) throw new Error('Upstream VOD returned ' + r.status);
+    return await r.json();
+  }
+
+  if (p === '/api/vod/list' && method === 'GET') {
+    const prov = (url.searchParams.get('provider') || 'shortmax').toLowerCase();
+    const lang = (url.searchParams.get('lang') || 'id').toLowerCase();
+    const type = (url.searchParams.get('type') || 'popular').toLowerCase();
+    const page = Math.max(1, +(url.searchParams.get('page') || 1));
+    const cacheKey = `list:${prov}:${lang}:${type}:${page}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    let upUrl = '';
+    if (prov === 'shortmax') {
+      const epType = (type === 'new' || type === 'latest') ? 'new' : (type === 'hot' ? 'hot' : 'popular');
+      upUrl = `https://apishort.com/v1/shortmax/api/v1/${epType}?lang=${lang}&page=${page}`;
+    } else if (prov === 'goodshort') {
+      const epType = type === 'feed' ? 'feed' : 'browse';
+      upUrl = epType === 'feed'
+        ? `https://apishort.com/v1/goodshort/v1/feed?lang=${lang}&page=${page}`
+        : `https://apishort.com/v1/goodshort/v1/browse?lang=${lang}&page=${page}&limit=24`;
+    } else if (prov === 'joyreels') {
+      upUrl = `https://apishort.com/v1/joyreels/dramas/browse?lang=${lang}&page=${page}&per_page=20`;
+    } else if (prov === 'raptdrama') {
+      upUrl = `https://apishort.com/v1/raptdrama/api/public/browse?page=${page}&limit=20`;
+    } else {
+      upUrl = `https://apishort.com/v1/shortmax/api/v1/popular?lang=${lang}&page=${page}`;
+    }
+
+    const raw = await fetchVodJson(upUrl).catch(() => ({}));
+    let items = [];
+    if (prov === 'shortmax') {
+      const list = raw.data || [];
+      items = list.map(d => ({
+        id: String(d.id || d.code),
+        title: d.name || '',
+        cover: d.cover || '',
+        episodes: d.episodes || 0,
+        summary: d.summary || '',
+        provider: 'shortmax',
+        lang,
+        views: d.views || 0
+      }));
+    } else if (prov === 'goodshort') {
+      const list = (raw.data && (raw.data.books || raw.data.list)) || [];
+      items = list.map(d => ({
+        id: String(d.id),
+        title: d.title || '',
+        cover: d.cover || '',
+        episodes: d.total_chapters || 0,
+        summary: d.desc || d.title || '',
+        provider: 'goodshort',
+        lang: d.lang || lang
+      }));
+    } else if (prov === 'joyreels') {
+      const list = raw.items || [];
+      items = list.map(d => ({
+        id: String(d.id),
+        title: d.title || '',
+        cover: d.poster || '',
+        episodes: d.episode_count || 0,
+        summary: d.category || '',
+        category: d.category || '',
+        provider: 'joyreels',
+        lang: raw.language || lang
+      }));
+    } else if (prov === 'raptdrama') {
+      const list = raw.data || [];
+      items = list.map(d => ({
+        id: String(d.id),
+        title: d.title || '',
+        cover: d.cover || d.poster_original || '',
+        episodes: d.total_episodes || 0,
+        summary: d.desc || '',
+        provider: 'raptdrama',
+        lang: 'zh'
+      }));
+    }
+
+    const payload = { provider: prov, lang, type, page, items };
+    setVodCache(cacheKey, payload, 15 * 60 * 1000);
+    return send(res, 200, payload);
+  }
+
+  if (p === '/api/vod/search' && method === 'GET') {
+    const prov = (url.searchParams.get('provider') || 'shortmax').toLowerCase();
+    const lang = (url.searchParams.get('lang') || 'id').toLowerCase();
+    const q = (url.searchParams.get('q') || '').trim();
+    if (!q) return send(res, 200, { provider: prov, lang, q, items: [] });
+    const cacheKey = `search:${prov}:${lang}:${q}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    let upUrl = '';
+    if (prov === 'shortmax') {
+      upUrl = `https://apishort.com/v1/shortmax/api/v1/search?lang=${lang}&q=${encodeURIComponent(q)}`;
+    } else if (prov === 'goodshort') {
+      upUrl = `https://apishort.com/v1/goodshort/v1/books/search?lang=${lang}&q=${encodeURIComponent(q)}`;
+    } else if (prov === 'joyreels') {
+      upUrl = `https://apishort.com/v1/joyreels/search?lang=${lang}&q=${encodeURIComponent(q)}&page=1`;
+    } else if (prov === 'raptdrama') {
+      upUrl = `https://apishort.com/v1/raptdrama/api/public/search?page=1&q=${encodeURIComponent(q)}`;
+    } else {
+      upUrl = `https://apishort.com/v1/shortmax/api/v1/search?lang=${lang}&q=${encodeURIComponent(q)}`;
+    }
+
+    const raw = await fetchVodJson(upUrl).catch(() => ({}));
+    let items = [];
+    if (prov === 'shortmax') {
+      const list = raw.data || [];
+      items = list.map(d => ({
+        id: String(d.id || d.code),
+        title: d.name || '',
+        cover: d.cover || '',
+        episodes: d.episodes || 0,
+        summary: d.summary || '',
+        provider: 'shortmax',
+        lang
+      }));
+    } else if (prov === 'goodshort') {
+      const list = (raw.data && (raw.data.books || raw.data.list)) || [];
+      items = list.map(d => ({
+        id: String(d.id),
+        title: d.title || '',
+        cover: d.cover || '',
+        episodes: d.total_chapters || 0,
+        summary: d.desc || d.title || '',
+        provider: 'goodshort',
+        lang
+      }));
+    } else if (prov === 'joyreels') {
+      const list = raw.items || [];
+      items = list.map(d => ({
+        id: String(d.id),
+        title: d.title || '',
+        cover: d.poster || '',
+        episodes: d.episode_count || 0,
+        summary: d.category || '',
+        provider: 'joyreels',
+        lang
+      }));
+    } else if (prov === 'raptdrama') {
+      const list = raw.data || [];
+      items = list.map(d => ({
+        id: String(d.id),
+        title: d.title || '',
+        cover: d.cover || d.poster_original || '',
+        episodes: d.total_episodes || 0,
+        summary: d.desc || '',
+        provider: 'raptdrama',
+        lang: 'zh'
+      }));
+    }
+
+    const payload = { provider: prov, lang, q, items };
+    setVodCache(cacheKey, payload, 5 * 60 * 1000);
+    return send(res, 200, payload);
+  }
+
+  if (p === '/api/vod/drama' && method === 'GET') {
+    const prov = (url.searchParams.get('provider') || 'shortmax').toLowerCase();
+    const id = (url.searchParams.get('id') || '').trim();
+    const lang = (url.searchParams.get('lang') || 'id').toLowerCase();
+    if (!id) throw fail(400, 'Parameter id diperlukan');
+    const cacheKey = `drama:${prov}:${lang}:${id}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    let upUrl = '';
+    if (prov === 'shortmax') {
+      upUrl = `https://apishort.com/v1/shortmax/api/v1/alleps/${id}?lang=${lang}`;
+    } else if (prov === 'goodshort') {
+      upUrl = `https://apishort.com/v1/goodshort/v1/book/${id}`;
+    } else if (prov === 'joyreels') {
+      upUrl = `https://apishort.com/v1/joyreels/drama/${id}/episodes?lang=${lang}`;
+    } else if (prov === 'raptdrama') {
+      upUrl = `https://apishort.com/v1/raptdrama/api/public/episodes/${id}`;
+    }
+
+    const raw = await fetchVodJson(upUrl).catch(() => ({}));
+    let payload = { provider: prov, id, lang, title: '', cover: '', summary: '', totalEpisodes: 0, episodes: [] };
+
+    if (prov === 'shortmax') {
+      const d = raw.data || {};
+      payload.title = d.name || '';
+      payload.summary = d.summary || '';
+      payload.totalEpisodes = d.totalEpisodes || (d.episodes || []).length;
+      payload.episodes = (d.episodes || []).map(ep => ({
+        episode: ep.episode,
+        title: 'Ep ' + ep.episode,
+        stream: (ep.video && (ep.video.video_1080 || ep.video.video_720 || ep.video.video_480)) || '',
+        cover: ep.cover || '',
+        duration: ep.duration || 0
+      }));
+    } else if (prov === 'goodshort') {
+      const d = raw.data || {};
+      payload.title = d.title || '';
+      payload.cover = d.cover || '';
+      payload.summary = d.desc || d.title || '';
+      payload.totalEpisodes = d.total_chapters || (d.chapters || []).length;
+      payload.episodes = (d.chapters || []).map(ch => ({
+        episode: ch.chapter,
+        title: 'Ep ' + ch.chapter,
+        stream: ch.stream,
+        quality: ch.quality || '1080p'
+      }));
+    } else if (prov === 'joyreels') {
+      payload.totalEpisodes = raw.total_episodes || (raw.episodes || []).length;
+      payload.episodes = (raw.episodes || []).map(ep => ({
+        episode: ep.idx,
+        episodeId: ep.episode_id,
+        title: 'Ep ' + ep.idx,
+        cover: ep.poster || '',
+        needsResolve: true
+      }));
+    } else if (prov === 'raptdrama') {
+      const list = raw.data || [];
+      payload.totalEpisodes = list.length;
+      payload.episodes = list.map(ep => ({
+        episode: ep.idx,
+        title: ep.title || ('Ep ' + ep.idx),
+        stream: ep.url,
+        segments: ep.segments
+      }));
+    }
+
+    setVodCache(cacheKey, payload, 30 * 60 * 1000);
+    return send(res, 200, payload);
+  }
+
+  if (p === '/api/vod/stream' && method === 'GET') {
+    const prov = (url.searchParams.get('provider') || 'joyreels').toLowerCase();
+    const id = (url.searchParams.get('id') || '').trim();
+    const ep = +(url.searchParams.get('ep') || 1);
+    const lang = (url.searchParams.get('lang') || 'id').toLowerCase();
+    const cacheKey = `stream:${prov}:${lang}:${id}:${ep}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    let upUrl = '';
+    if (prov === 'joyreels') {
+      upUrl = `https://apishort.com/v1/joyreels/drama/${id}/episode/${ep}?lang=${lang}`;
+    } else if (prov === 'goodshort') {
+      upUrl = `https://apishort.com/v1/goodshort/v1/book/${id}/chapter/${ep}`;
+    }
+
+    const raw = await fetchVodJson(upUrl).catch(() => ({}));
+    let streamUrl = '';
+    if (prov === 'joyreels') {
+      streamUrl = raw.content_resource_url || '';
+    } else if (prov === 'goodshort') {
+      streamUrl = (raw.data && raw.data.stream) || '';
+    }
+
+    const payload = { provider: prov, id, ep, stream: streamUrl, raw };
+    if (streamUrl) setVodCache(cacheKey, payload, 30 * 60 * 1000);
+    return send(res, 200, payload);
+  }
+
   /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U, anti multi-connect MAC, penyambung TS otomatis, & kompresi resolusi FFmpeg */
   if (p === '/api/stream' && method === 'GET') {
     const rawU = url.searchParams.get('u') || '';

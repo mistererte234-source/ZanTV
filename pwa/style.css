@@ -1333,6 +1333,616 @@ body.stage-theater-fullscreen .foot {
   font-size: 12px;
 }
 
+/* ==========================================================================
+   iOS Glassmorphism Segmented Switcher (Live TV vs Short Drama)
+   ========================================================================== */
+.nav-segment {
+  display: inline-flex;
+  align-items: center;
+  padding: 3.5px;
+  background: rgba(16, 22, 36, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  gap: 2px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+  user-select: none;
+}
+.seg-btn svg { width: 16px; height: 16px; stroke-width: 2.2; }
+.seg-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.seg-btn.is-active {
+  background: var(--grad);
+  color: #050810;
+  font-weight: 700;
+  box-shadow: 0 3px 14px rgba(34, 211, 238, 0.32), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.seg-btn.is-active svg { stroke: #050810; }
+.seg-badge {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  color: #050810;
+  letter-spacing: 0.04em;
+}
+.seg-btn:not(.is-active) .seg-badge {
+  background: rgba(34, 211, 238, 0.16);
+  color: var(--cyan);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+}
+
+/* ==========================================================================
+   Short Drama / VOD Explorer Panel (iOS Glassmorphism)
+   ========================================================================== */
+.is-vod-mode .layout {
+  grid-template-columns: minmax(400px, 1fr) minmax(440px, 1.35fr);
+  grid-template-areas: "vod stage";
+}
+.is-vod-mode #liveSearchLabel { display: none; }
+
+.vodpane {
+  grid-area: vod;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  height: 100%;
+}
+
+/* VOD Top Bar */
+.vod-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.vod-search-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16, 22, 36, 0.75);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 0 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.vod-search-wrap:focus-within {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px var(--cyan), 0 0 18px rgba(34, 211, 238, 0.2);
+}
+.vod-search-ic { width: 17px; height: 17px; color: var(--muted); }
+.vod-search-wrap input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 10px 0;
+  color: var(--text);
+  font-size: 13.5px;
+}
+.vod-search-clear {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 13px;
+  border-radius: 50%;
+}
+.vod-search-clear:hover { color: var(--text); }
+.vod-lang-toggle {
+  height: 38px;
+  padding: 0 14px;
+  font-size: 12.5px;
+  font-weight: 700;
+  border-radius: 999px;
+  background: rgba(16, 22, 36, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text);
+}
+.vod-lang-toggle:hover { border-color: var(--cyan); }
+
+/* VOD Filters (Providers & Category Chips) */
+.vod-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vod-prov-tabs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.vod-prov-tabs::-webkit-scrollbar { display: none; }
+.vod-prov-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(23, 32, 51, 0.6);
+  backdrop-filter: blur(12px);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.vod-prov-btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+.vod-prov-btn.is-active {
+  background: rgba(34, 211, 238, 0.12);
+  border-color: rgba(34, 211, 238, 0.45);
+  color: #38bdf8;
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.2);
+}
+.vod-prov-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+.vod-prov-btn.is-active .vod-prov-badge {
+  background: rgba(34, 211, 238, 0.22);
+  color: #67e8f9;
+}
+
+.vod-type-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vod-type-chip {
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.vod-type-chip:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.vod-type-chip.is-active {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #d8b4fe;
+}
+
+/* VOD Content Scroll Area */
+.vod-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* VOD Card Grid */
+.vod-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+  gap: 12px;
+  padding-bottom: 20px;
+}
+
+/* VOD Card */
+.vod-card {
+  display: flex;
+  flex-direction: column;
+  background: rgba(16, 22, 36, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s, box-shadow 0.22s;
+  user-select: none;
+}
+.vod-card:hover {
+  transform: translateY(-4px) scale(1.02);
+  border-color: rgba(34, 211, 238, 0.4);
+  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.7), 0 0 20px rgba(34, 211, 238, 0.2);
+}
+.vod-card:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.vod-card-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  background: #0d121d;
+  overflow: hidden;
+}
+.vod-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.vod-card:hover .vod-card-img {
+  transform: scale(1.06);
+}
+.vod-card-top-badges {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  right: 7px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+  z-index: 2;
+}
+.vod-badge-ep {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(8, 11, 18, 0.85);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.vod-badge-lang {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(34, 211, 238, 0.2);
+  backdrop-filter: blur(8px);
+  color: #67e8f9;
+  border: 1px solid rgba(34, 211, 238, 0.35);
+}
+.vod-card-glow {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(8, 11, 18, 0.95) 0%, rgba(8, 11, 18, 0.2) 50%, transparent 100%);
+  pointer-events: none;
+}
+
+.vod-card-meta {
+  padding: 9px 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.vod-card-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 32px;
+}
+.vod-card-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.vod-card-prov {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.vod-card-play-ic {
+  font-size: 10px;
+  color: var(--cyan);
+  opacity: 0.8;
+  transition: transform 0.2s, opacity 0.2s;
+}
+.vod-card:hover .vod-card-play-ic {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+/* VOD Loading & Empty */
+.vod-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.vod-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+.vod-empty-icon { font-size: 40px; opacity: 0.6; }
+.vod-empty-text { margin: 0; font-size: 13.5px; max-width: 32ch; }
+
+/* ==========================================================================
+   iOS Bottom Sheet (Detail Drama & Episode Selector)
+   ========================================================================== */
+.vod-sheet {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  max-width: 680px;
+  width: 95vw;
+  margin: auto;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+.vod-sheet::backdrop {
+  background: rgba(4, 7, 12, 0.75);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.vod-sheet-card {
+  position: relative;
+  background: rgba(16, 22, 36, 0.94);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  padding: 24px clamp(16px, 4vw, 28px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.vod-sheet-handle {
+  width: 38px;
+  height: 4.5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  margin: -8px auto 6px;
+}
+.vod-sheet-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  background: rgba(255, 255, 255, 0.08);
+}
+.vod-sheet-close:hover { background: rgba(255, 255, 255, 0.16); }
+
+/* Drama Hero Info */
+.vod-sheet-hero {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.vod-sheet-cover {
+  width: 105px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+  flex-shrink: 0;
+}
+.vod-sheet-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.vod-sheet-badge {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(34, 211, 238, 0.14);
+  color: #38bdf8;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  letter-spacing: 0.04em;
+}
+.vod-sheet-title {
+  margin: 0;
+  font-size: clamp(16px, 2.5vw, 20px);
+  font-weight: 800;
+  line-height: 1.25;
+}
+.vod-sheet-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-height: 72px;
+  overflow-y: auto;
+}
+.vod-sheet-play-first {
+  align-self: flex-start;
+  margin-top: 4px;
+  height: 38px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+
+/* Episode Section */
+.vod-ep-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 14px;
+}
+.vod-ep-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.vod-ep-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+.vod-ep-range-tabs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+}
+.vod-range-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.16s;
+}
+.vod-range-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+.vod-range-btn.is-active {
+  background: rgba(34, 211, 238, 0.16);
+  border-color: rgba(34, 211, 238, 0.4);
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.vod-ep-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.vod-ep-btn {
+  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(23, 32, 51, 0.65);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  padding: 2px;
+}
+.vod-ep-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+.vod-ep-btn.is-active {
+  background: var(--grad);
+  color: #050810;
+  border: 0;
+  font-weight: 800;
+  box-shadow: 0 0 14px rgba(34, 211, 238, 0.4);
+}
+.vod-ep-no {
+  font-size: 13px;
+  font-weight: 700;
+}
+.vod-ep-dur {
+  font-size: 9px;
+  opacity: 0.65;
+  margin-top: -1px;
+}
+.vod-ep-loading, .vod-ep-err, .vod-ep-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 24px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ==========================================================================
+   Responsive Adaptations for VOD
+   ========================================================================== */
+@media (max-width: 1199px) {
+  .is-vod-mode .layout {
+    grid-template-columns: 1fr minmax(380px, 1.25fr);
+    grid-template-rows: 1fr;
+    grid-template-areas: "vod stage";
+  }
+}
+@media (max-width: 860px) {
+  .nav-segment {
+    order: 2;
+    margin-left: auto;
+  }
+  .is-vod-mode .layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .is-vod-mode .vodpane {
+    display: flex;
+    flex-direction: column;
+    min-height: 60vh;
+  }
+  .vod-grid {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 10px;
+  }
+  .vod-sheet {
+    width: 100vw;
+    max-width: 100vw;
+    margin-bottom: 0;
+    border-radius: 20px 20px 0 0;
+  }
+  .vod-sheet-card {
+    max-height: 80vh;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+
 
 
 

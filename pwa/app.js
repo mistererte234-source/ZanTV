@@ -1732,6 +1732,16 @@ el.video.addEventListener('timeupdate', function () {
 el.video.addEventListener('pause', function () { W.last = 0; });
 el.video.addEventListener('waiting', function () { W.last = 0; });
 el.video.addEventListener('volumechange', syncMute);
+el.video.addEventListener('ended', function () {
+  if (S.playing && S.playing.isVod && window.ZanVod) {
+    var hasNext = window.ZanVod.playNextEpisode();
+    if (hasNext) toast('Memutar episode berikutnya...');
+  }
+});
+window.ZanTV = {
+  playVod: function (vodCh) { play(vodCh); },
+  playChannel: play
+};
 
 /* ------------------------------------------------------------------ */
 /* Pilihan Resolusi (Quality Selector) & Mode Hemat Data               */
@@ -2219,6 +2229,14 @@ function updateNow() {
     el.nowMeta.textContent = S.channels.length ? 'Pilih dari daftar, atau ketik nomor channel.' : 'Tambahkan playlist M3U untuk mulai.';
     if (nowEpg) { nowEpg.hidden = true; nowEpg.innerHTML = ''; }
     if (guideBtn) guideBtn.hidden = !EPG.meta;
+  } else if (c.isVod) {
+    el.nowNo.textContent = '🎬';
+    el.nowName.textContent = c.name;
+    var provStr = (c.vodDrama && c.vodDrama.provider) ? (c.vodDrama.provider.toUpperCase() + ' • ') : '';
+    var epInfo = (c.vodEp && c.vodEp.episode) ? ('Episode ' + c.vodEp.episode + (c.totalEpisodes ? ('/' + c.totalEpisodes) : '') + ' • ') : '';
+    el.nowMeta.textContent = provStr + epInfo + ((c.vodDrama && (c.vodDrama.summary || c.vodDrama.title)) || 'Short Drama Series');
+    if (nowEpg) { nowEpg.hidden = true; nowEpg.innerHTML = ''; }
+    if (guideBtn) guideBtn.hidden = true;
   } else {
     el.nowNo.textContent = c.no;
     el.nowName.textContent = c.name;
@@ -2263,6 +2281,14 @@ function cue(ch) {
 
 var osdTimer;
 function showOSD(ch, digits) {
+  if (ch && ch.isVod) {
+    el.osdNo.textContent = '🎬';
+    el.osdName.textContent = ch.name;
+    el.osd.classList.add('show');
+    clearTimeout(osdTimer);
+    osdTimer = setTimeout(function () { el.osd.classList.remove('show'); }, 2600);
+    return;
+  }
   el.osdNo.textContent = digits != null ? digits : ch.no;
   var label = digits != null ? (ch ? ch.name : '') : ch.name;
   if (digits == null && ch) {
@@ -2284,6 +2310,11 @@ function pushRecent(url) {
 }
 
 function zap(dir) {
+  if (S.playing && S.playing.isVod && window.ZanVod) {
+    if (dir > 0) window.ZanVod.playNextEpisode();
+    else window.ZanVod.playPrevEpisode();
+    return;
+  }
   var list = S.view.length ? S.view : S.channels;
   if (!list.length) return;
   var cur = S.playing || S.cued;

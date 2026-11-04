@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.18">
+<link rel="stylesheet" href="style.css?v=1.7.19">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -67,7 +67,18 @@
     <img src="icons/icon-192.png" alt="" width="34" height="34">
     <span class="wordmark">Zan<b>TV</b></span>
   </a>
-  <label class="search">
+  <div class="nav-segment" id="navSegment">
+    <button class="seg-btn is-active" id="segLiveBtn" type="button" data-mode="live">
+      <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="15" rx="2"/><polyline points="17 2 12 7 7 2"/></svg>
+      <span>Live TV</span>
+    </button>
+    <button class="seg-btn" id="segVodBtn" type="button" data-mode="vod">
+      <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      <span>Short Drama</span>
+      <span class="seg-badge">VOD</span>
+    </button>
+  </div>
+  <label class="search" id="liveSearchLabel">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
     <input id="search" type="search" name="zantv-cari" placeholder="Cari channel atau nomor" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" data-lpignore="true" data-1p-ignore readonly>
   </label>
@@ -235,12 +246,76 @@
     <div class="list-head"><span id="listCount"></span></div>
     <div class="list" id="list" role="listbox" aria-label="Daftar channel"></div>
   </section>
+
+  <!-- Short Drama / VOD Explorer Panel -->
+  <section class="vodpane" id="vodPane" hidden aria-label="Eksplorasi Short Drama">
+    <div class="vod-topbar">
+      <div class="vod-search-wrap">
+        <svg class="vod-search-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+        <input id="vodSearchInput" type="search" placeholder="Cari ribuan short drama & episode..." autocomplete="off">
+        <button class="vod-search-clear" id="vodSearchClear" type="button" hidden aria-label="Hapus pencarian">✕</button>
+      </div>
+      <button class="btn ghost vod-lang-toggle" id="vodLangToggle" type="button" title="Ganti Bahasa Drama">🇮🇩 ID</button>
+    </div>
+
+    <div class="vod-filters">
+      <div class="vod-prov-tabs" id="vodProvTabs"></div>
+      <div class="vod-type-chips" id="vodTypeChips">
+        <button class="vod-type-chip is-active" type="button" data-type="popular">🔥 Populer</button>
+        <button class="vod-type-chip" type="button" data-type="new">🆕 Terbaru</button>
+        <button class="vod-type-chip" type="button" data-type="hot">⚡ Hot</button>
+      </div>
+    </div>
+
+    <div class="vod-content">
+      <div class="vod-loading" id="vodLoading" hidden>
+        <div class="spinner"><i></i></div>
+        <p>Mengambil koleksi drama...</p>
+      </div>
+
+      <div class="vod-empty" id="vodEmpty" hidden>
+        <div class="vod-empty-icon">🎬</div>
+        <p class="vod-empty-text">Tidak ada drama ditemukan.</p>
+      </div>
+
+      <div class="vod-grid" id="vodGrid"></div>
+    </div>
+  </section>
 </main>
 
 <footer class="foot">
   <a href="https://zandev.id" target="_blank" rel="noopener">Design × Code by <b>Zandev</b></a>
   <span>ZanTV · jadwal shalat metode Kemenag RI</span>
 </footer>
+
+<!-- Bottom Sheet / Modal Detail Drama & Episode -->
+<dialog class="vod-sheet" id="vodSheet" aria-labelledby="vodSheetTitle">
+  <div class="vod-sheet-card">
+    <div class="vod-sheet-handle"></div>
+    <button class="ic vod-sheet-close" id="vodSheetClose" type="button" aria-label="Tutup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    
+    <div class="vod-sheet-hero">
+      <img class="vod-sheet-cover" id="vodSheetCover" src="icons/logo.jpg" alt="" loading="lazy">
+      <div class="vod-sheet-info">
+        <span class="vod-sheet-badge" id="vodSheetBadge">SHORT DRAMA</span>
+        <h2 class="vod-sheet-title" id="vodSheetTitle">Judul Drama</h2>
+        <p class="vod-sheet-desc" id="vodSheetDesc">Sinopsis...</p>
+        <button class="btn primary vod-sheet-play-first" id="vodSheetPlayFirst" type="button">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg>
+          <span>Putar Episode 1</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="vod-ep-section">
+      <div class="vod-ep-header">
+        <h3>Daftar Episode</h3>
+        <div class="vod-ep-range-tabs" id="vodEpRangeTabs"></div>
+      </div>
+      <div class="vod-ep-list" id="vodEpList"></div>
+    </div>
+  </div>
+</dialog>
 
 <dialog class="sheet" id="plDialog" aria-labelledby="plTitle">
   <form method="dialog" class="sheet-head">
@@ -460,8 +535,9 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.18"></script>
-<script src="zan-sports.js?v=1.7.18"></script>
-<script src="app.js?v=1.7.18"></script>
+<script src="zan-sig.js?v=1.7.19"></script>
+<script src="zan-sports.js?v=1.7.19"></script>
+<script src="zan-vod.js?v=1.7.19"></script>
+<script src="app.js?v=1.7.19"></script>
 </body>
 </html>
