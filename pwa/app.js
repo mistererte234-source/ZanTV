@@ -1789,7 +1789,8 @@ el.video.addEventListener('ended', function () {
 });
 window.ZanTV = {
   playVod: function (vodCh) { play(vodCh); },
-  playChannel: play
+  playChannel: play,
+  updateVideoAspect: updateVideoAspect
 };
 
 /* ------------------------------------------------------------------ */
