@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.20">
+<link rel="stylesheet" href="style.css?v=1.7.21">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -135,7 +135,7 @@
 <main class="layout">
   <section class="stagepane">
     <div class="stage" id="stage" tabindex="0" aria-label="Pemutar video. Panah atas dan bawah untuk ganti channel.">
-      <video id="video" playsinline></video>
+      <video id="video" playsinline webkit-playsinline></video>
 
       <div class="idle" id="idle">
         <svg class="idle-mark" viewBox="0 0 100 100" aria-hidden="true">
@@ -220,6 +220,7 @@
         <button class="ic" id="muteBtn" title="Suara (M)" aria-label="Nyalakan atau matikan suara"><svg viewBox="0 0 24 24" id="muteIcon"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg></button>
         <button class="ic" id="favBtn" title="Favorit (S)" aria-label="Tambah ke favorit" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 4.3 1-6.1-4.4-4.3 6.1-.9z"/></svg></button>
         <button class="ic" id="pipBtn" title="Picture-in-picture" aria-label="Picture in picture"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg></button>
+        <button class="ic" id="fitBtn" title="Mode Layar Penuh HP (Fit / Fill)" aria-label="Rasio Layar" hidden><svg viewBox="0 0 24 24" id="fitIcon"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
         <button class="ic" id="fsBtn" title="Layar penuh (F)" aria-label="Layar penuh"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
       </div>
     </div>
@@ -535,9 +536,9 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.20"></script>
-<script src="zan-sports.js?v=1.7.20"></script>
-<script src="zan-vod.js?v=1.7.20"></script>
-<script src="app.js?v=1.7.20"></script>
+<script src="zan-sig.js?v=1.7.21"></script>
+<script src="zan-sports.js?v=1.7.21"></script>
+<script src="zan-vod.js?v=1.7.21"></script>
+<script src="app.js?v=1.7.21"></script>
 </body>
 </html>

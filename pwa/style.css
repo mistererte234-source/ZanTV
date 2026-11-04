@@ -97,6 +97,25 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .stage:focus-visible { box-shadow: 0 0 0 1px rgba(34, 211, 238, .25), 0 0 40px rgba(109, 124, 247, .35); }
 .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 
+/* Adaptasi video vertikal (Short Drama / Dracin 9:16) */
+.stage.is-vertical {
+  aspect-ratio: 9 / 16;
+  max-height: min(78vh, 720px);
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto;
+}
+.stage.is-vertical video {
+  object-fit: contain;
+}
+.stage.is-vertical.is-fit-cover video {
+  object-fit: cover !important;
+}
+#fitBtn.is-active {
+  color: var(--cyan);
+  background: rgba(34, 211, 238, 0.2);
+}
+
 .idle {
   position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px;
   color: var(--muted); text-align: center; padding: 24px;
@@ -163,9 +182,38 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 0 rgba(251, 113, 133, .7); animation: pulse 1.8s infinite; }
 @keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(251, 113, 133, 0); } 100% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0); } }
 
-.stage:fullscreen { border-radius: 0; aspect-ratio: auto; }
-.stage:fullscreen::before { display: none; }
-.stage:-webkit-full-screen { border-radius: 0; width: 100%; height: 100%; }
+.stage:fullscreen {
+  border-radius: 0 !important;
+  aspect-ratio: auto !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  background: #000 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.stage:fullscreen::before { display: none !important; }
+.stage:-webkit-full-screen {
+  border-radius: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  background: #000 !important;
+}
+.stage:-webkit-full-screen::before { display: none !important; }
+
+/* Video vertikal di mode Fullscreen */
+.stage.is-vertical:fullscreen video,
+.stage.is-vertical:-webkit-full-screen video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+.stage.is-vertical.is-fit-cover:fullscreen video,
+.stage.is-vertical.is-fit-cover:-webkit-full-screen video {
+  object-fit: cover !important;
+}
 
 .now { display: flex; flex-direction: column; gap: 10px; }
 .now-main { display: flex; gap: 14px; align-items: center; }
@@ -282,6 +330,13 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .stagepane { position: sticky; top: 0; z-index: 4; background: var(--ink); margin: 0 calc(-1 * clamp(14px, 3vw, 28px)); padding: 0 0 8px; }
   .stage { border-radius: 0; }
   .stage::before { display: none; }
+  .stage.is-vertical {
+    aspect-ratio: 9 / 16 !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+    max-height: calc(100svh - 96px) !important;
+    margin: 0 auto !important;
+  }
   .now { padding: 0 clamp(14px, 3vw, 28px); }
   .now h1 { font-size: 17px; }
   .now-no { font-size: 26px; }
@@ -814,6 +869,9 @@ body.stage-theater-fullscreen .stage video {
   width: 100% !important;
   height: 100% !important;
   object-fit: contain !important;
+}
+body.stage-theater-fullscreen .stage.is-vertical.is-fit-cover video {
+  object-fit: cover !important;
 }
 body.stage-theater-fullscreen .stage::before {
   display: none !important;

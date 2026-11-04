@@ -1519,6 +1519,23 @@ function streamProxyUrl(rawUrl, ch, serverQ) {
   return q;
 }
 
+function isVerticalVideo() {
+  if (el.video && el.video.videoHeight && el.video.videoWidth) {
+    return el.video.videoHeight > el.video.videoWidth;
+  }
+  if (S.playing && (S.playing.isVod || S.playing.isVertical || S.playing.group === 'Short Drama')) return true;
+  if (document.body.classList.contains('is-vod-mode') && S.playing) return true;
+  return false;
+}
+
+function updateVideoAspect() {
+  var isVert = isVerticalVideo();
+  el.stage.classList.toggle('is-vertical', isVert);
+  document.body.classList.toggle('is-stage-vertical', isVert);
+  var fitBtn = $('#fitBtn');
+  if (fitBtn) fitBtn.hidden = !isVert;
+}
+
 function play(ch, opts) {
   opts = opts || {};
   if (!ch) return;
@@ -1528,6 +1545,7 @@ function play(ch, opts) {
   E.nativeFallback = false;
   S.playing = ch; S.cued = null;
   LS.set('last', ch.url);
+  updateVideoAspect();
   if (!opts.retry) { flushWatch(); W.ch = ch; W.last = 0; pushRecent(ch.url); showOSD(ch); sendPresence(); }
   markPlaying(); updateNow(); hideMsg();
   el.idle.hidden = true;
@@ -1716,6 +1734,7 @@ el.video.addEventListener('playing', function () {
 });
 el.video.addEventListener('loadedmetadata', function () {
   if (el.video.videoHeight) QUAL.activeHeight = el.video.videoHeight;
+  updateVideoAspect();
   updateQualBadge();
   renderQualMenu();
   bindVideoTextTracks();
@@ -1725,6 +1744,7 @@ el.video.addEventListener('resize', function () {
     QUAL.activeHeight = el.video.videoHeight;
     updateQualBadge();
   }
+  updateVideoAspect();
 });
 el.video.addEventListener('waiting', function () {
   if (healBufferGap()) { setBusy(false); return; }
@@ -2380,12 +2400,19 @@ function isFullscreen() {
 
 function enterFullscreen() {
   if (isFullscreen()) return;
+  var isVert = isVerticalVideo();
   var req = el.stage.requestFullscreen || el.stage.webkitRequestFullscreen;
   if (req) {
     try {
       var p = req.call(el.stage);
       if (p && p.then) {
-        p.then(lockLandscape).catch(function () {
+        p.then(function () {
+          if (isVert) {
+            lockPortrait();
+          } else {
+            lockLandscape();
+          }
+        }).catch(function () {
           document.body.classList.add('stage-theater-fullscreen');
         });
       }
@@ -2406,6 +2433,7 @@ function exitFullscreen() {
     } catch (e) {}
   }
   document.body.classList.remove('stage-theater-fullscreen');
+  unlockOrientation();
 }
 
 function toggleFullscreen() {
@@ -2420,12 +2448,26 @@ function lockLandscape() {
   try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(function () {}); } catch (e) {}
 }
 
+function lockPortrait() {
+  try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('portrait').catch(function () {}); } catch (e) {}
+}
+
+function unlockOrientation() {
+  try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
+}
+
 /* Event sync saat fullscreen berubah atau ESC ditekan */
 document.addEventListener('fullscreenchange', function () {
-  if (!document.fullscreenElement) document.body.classList.remove('stage-theater-fullscreen');
+  if (!document.fullscreenElement) {
+    document.body.classList.remove('stage-theater-fullscreen');
+    unlockOrientation();
+  }
 });
 document.addEventListener('webkitfullscreenchange', function () {
-  if (!document.webkitFullscreenElement) document.body.classList.remove('stage-theater-fullscreen');
+  if (!document.webkitFullscreenElement) {
+    document.body.classList.remove('stage-theater-fullscreen');
+    unlockOrientation();
+  }
 });
 window.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' && document.body.classList.contains('stage-theater-fullscreen')) {
@@ -2449,14 +2491,17 @@ window.addEventListener('keydown', function (e) {
 
   function handleOrientation() {
     var current = getOrientation();
+    var isVert = isVerticalVideo();
     if (prevOrientation && prevOrientation !== current) {
       if (current === 'landscape') {
-        if (S.playing || S.cued) {
+        // Hanya video horizontal yang auto-fullscreen saat landscape
+        if ((S.playing || S.cued) && !isVert) {
           enterFullscreen();
           toast('Mode Landscape: Layar penuh otomatis');
         }
       } else if (current === 'portrait') {
-        if (isFullscreen()) {
+        // Jangan keluar fullscreen kalau lagi nonton video vertikal (Dracin) di HP!
+        if (isFullscreen() && !isVert) {
           exitFullscreen();
           toast('Mode Portrait: Kembali ke tampilan normal');
         }
@@ -2565,6 +2610,7 @@ document.addEventListener('keydown', function (e) {
   if (/^[0-9]$/.test(k)) { e.preventDefault(); typeDigit(k); return; }
   if (k === '/') { e.preventDefault(); unlockSearch(); el.search.focus(); return; }
   if (k === 'f' || k === 'F') { e.preventDefault(); toggleFullscreen(); return; }
+  if (k === 'z' || k === 'Z') { e.preventDefault(); if (isVerticalVideo()) toggleFitMode(); return; }
   if (k === 'c' || k === 'C') { e.preventDefault(); setCcMode(CC.mode === 'off' ? 'id' : 'off'); return; }
   if (k === 's' || k === 'S' || k === 'ContextMenu') { e.preventDefault(); toggleFav(); return; }
   if (k === 'm' || k === 'M') { el.video.muted = !el.video.muted; return; }
@@ -2679,6 +2725,17 @@ $('#nextChBtn').addEventListener('click', function () { zap(1); });
 $('#muteBtn').addEventListener('click', function () { el.video.muted = !el.video.muted; if (!el.video.muted && el.video.volume === 0) el.video.volume = 1; });
 el.favBtn.addEventListener('click', toggleFav);
 $('#fsBtn').addEventListener('click', toggleFullscreen);
+function toggleFitMode() {
+  var isCover = el.stage.classList.toggle('is-fit-cover');
+  var btn = $('#fitBtn');
+  if (btn) {
+    btn.classList.toggle('is-active', isCover);
+    btn.title = isCover ? 'Mode Layar: Penuh HP (Cover) - Klik untuk Muat Pas (Fit)' : 'Mode Layar: Muat Pas (Fit) - Klik untuk Penuh Layar (Cover)';
+  }
+  toast(isCover ? 'Layar Penuh HP (Edge-to-Edge)' : 'Layar Muat Utuh (Fit Original)');
+}
+var fitBtnEl = $('#fitBtn');
+if (fitBtnEl) fitBtnEl.addEventListener('click', toggleFitMode);
 $('#pipBtn').addEventListener('click', function () {
   if (document.pictureInPictureElement) document.exitPictureInPicture().catch(function () {});
   else if (el.video.requestPictureInPicture) el.video.requestPictureInPicture().catch(function () { toast('Picture-in-picture belum tersedia untuk channel ini'); });
@@ -2768,7 +2825,14 @@ $('#copyBtn').addEventListener('click', function () {
       .catch(function () { prompt('Salin alamat ini:', url); });
   } else prompt('Salin alamat ini:', url);
 });
-el.stage.addEventListener('dblclick', function (e) { if (!e.target.closest('.controls, .msg, .player-pop')) toggleFullscreen(); });
+el.stage.addEventListener('dblclick', function (e) {
+  if (e.target.closest('.controls, .msg, .player-pop')) return;
+  if (isFullscreen() && isVerticalVideo()) {
+    toggleFitMode();
+  } else {
+    toggleFullscreen();
+  }
+});
 el.idle.addEventListener('click', function () { if (S.cued) play(S.cued); });
 
 /* geser naik/turun di layar sentuh = ganti channel */
