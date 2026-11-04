@@ -125,17 +125,26 @@ function buildDashClearKeys(clearKeys) {
   var out = {};
   Object.keys(clearKeys).forEach(function (rawKid) {
     var rawKey = clearKeys[rawKid];
-    var kidClean = String(rawKid).replace(/-/g, '').trim();
-    var keyClean = String(rawKey).replace(/-/g, '').trim();
-    var kidB64 = hexToBase64Url(kidClean);
-    var keyB64 = hexToBase64Url(keyClean);
-    if (kidB64 && keyB64) out[kidB64] = keyB64;
-    if (keyB64) {
-      out[kidClean.toLowerCase()] = keyB64;
-      out[kidClean.toUpperCase()] = keyB64;
+    var kidClean = String(rawKid).replace(/[^0-9a-fA-F]/g, '');
+    var keyClean = String(rawKey).replace(/[^0-9a-fA-F]/g, '');
+
+    var kidB64 = '';
+    var keyB64 = '';
+
+    if (kidClean.length === 32) {
+      kidB64 = hexToBase64Url(kidClean);
+    } else if (/^[A-Za-z0-9_-]{22}$/.test(String(rawKid).trim())) {
+      kidB64 = String(rawKid).trim();
     }
-    if (kidClean && keyClean) {
-      out[kidClean] = keyClean;
+
+    if (keyClean.length === 32) {
+      keyB64 = hexToBase64Url(keyClean);
+    } else if (/^[A-Za-z0-9_-]{22}$/.test(String(rawKey).trim())) {
+      keyB64 = String(rawKey).trim();
+    }
+
+    if (kidB64 && keyB64) {
+      out[kidB64] = keyB64;
     }
   });
   return Object.keys(out).length ? out : null;
@@ -1098,15 +1107,56 @@ function startDash(url, token, ch, currentClearKeys) {
     E.dash = p; E.mode = 'dash';
 
     var keys = currentClearKeys || (ch && ch.clearKeys);
-    if (keys) {
-      var ck = buildDashClearKeys(keys);
-      if (ck) {
-        p.setProtectionData({
-          'org.w3.clearkey': {
-            clearkeys: ck
-          }
-        });
-      }
+    var ck = keys ? buildDashClearKeys(keys) : null;
+    if (ck) {
+      p.setProtectionData({
+        'org.w3.clearkey': {
+          clearkeys: ck,
+          priority: 0
+        },
+        '1077efec-c0b2-4d02-ace3-3c1e52e2fb4b': {
+          clearkeys: ck,
+          priority: 0
+        }
+      });
+
+      p.on(dashjs.MediaPlayer.events.MANIFEST_LOADED, function (e) {
+        if (token !== E.token) return;
+        try {
+          var manifest = e && e.data;
+          if (!manifest) return;
+          var periods = Array.isArray(manifest.Period) ? manifest.Period : (manifest.Period ? [manifest.Period] : []);
+          periods.forEach(function (period) {
+            var adaptSets = Array.isArray(period.AdaptationSet) ? period.AdaptationSet : (period.AdaptationSet ? [period.AdaptationSet] : []);
+            adaptSets.forEach(function (as) {
+              if (!as.ContentProtection) as.ContentProtection = [];
+              var cpList = Array.isArray(as.ContentProtection) ? as.ContentProtection : [as.ContentProtection];
+              var hasClearKey = cpList.some(function (cp) {
+                var uri = String((cp && cp.schemeIdUri) || '').toLowerCase();
+                return uri.includes('1077efec') || uri.includes('e2719d58') || uri.includes('clearkey');
+              });
+              if (!hasClearKey) {
+                var defKid = null;
+                cpList.forEach(function (cp) {
+                  if (cp && (cp['cenc:default_KID'] || cp.cencDefaultKid || cp.default_KID)) {
+                    defKid = cp['cenc:default_KID'] || cp.cencDefaultKid || cp.default_KID;
+                  }
+                });
+                as.ContentProtection.unshift({
+                  schemeIdUri: 'urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b',
+                  value: 'ClearKey',
+                  cencDefaultKid: defKid
+                });
+                as.ContentProtection.unshift({
+                  schemeIdUri: 'urn:uuid:e2719d58-a985-b3c9-781a-b030e4d41fa6',
+                  value: 'ClearKey',
+                  cencDefaultKid: defKid
+                });
+              }
+            });
+          });
+        } catch (err) {}
+      });
     }
 
     p.on(dashjs.MediaPlayer.events.ERROR, function (e) {
