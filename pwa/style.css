@@ -307,6 +307,57 @@ body.stage-theater-fullscreen .stage-watermark {
   opacity: 0.68;
 }
 
+/* ---------- Tombol Tutup Pemutar Video (Pojok Kiri Atas) ---------- */
+.stage-close-btn {
+  position: absolute;
+  top: clamp(10px, 3%, 16px);
+  left: clamp(12px, 3.5%, 20px);
+  z-index: 5;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(10, 15, 26, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: opacity .2s ease, transform .15s ease, background .2s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  opacity: 0.85;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.stage-close-btn:hover {
+  opacity: 1;
+  background: rgba(239, 68, 68, 0.8);
+  transform: scale(1.08);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.stage-close-btn:active {
+  transform: scale(0.92);
+}
+.stage-close-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: #fff;
+}
+.stage:not(.is-playing) .stage-close-btn {
+  display: none !important;
+}
+.stage.idle-ui .stage-close-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+.stage:fullscreen .stage-close-btn,
+.stage:-webkit-full-screen .stage-close-btn,
+body.stage-theater-fullscreen .stage-close-btn {
+  top: calc(clamp(12px, 3%, 20px) + env(safe-area-inset-top, 0px));
+  left: calc(clamp(14px, 3.5%, 24px) + env(safe-area-inset-left, 0px));
+}
+
 @media (max-width: 600px) {
   #pipBtn { display: none !important; }
 }
@@ -482,7 +533,18 @@ body.stage-theater-fullscreen .stage-watermark {
   .layout {
     display: flex; flex-direction: column; height: auto; gap: 12px;
   }
-  .stagepane { position: sticky; top: 0; z-index: 4; background: var(--ink); margin: 0 calc(-1 * clamp(14px, 3vw, 28px)); padding: 0 0 8px; }
+  .stagepane {
+    position: relative;
+    background: var(--ink);
+    margin: 0 calc(-1 * clamp(14px, 3vw, 28px));
+    padding: 0 0 8px;
+  }
+  body.is-stage-playing .stagepane,
+  .stagepane:has(.stage.is-playing) {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+  }
   .stage { border-radius: 0; }
   .stage::before { display: none; }
   .stage.is-vertical {

@@ -1,4 +1,4 @@
-/* ZanTV VOD & Short Drama Explorer v1.7.24
+/* ZanTV VOD & Short Drama Explorer v1.7.25
  * Agregator 42 Platform Short Drama (ShortMax, GoodShort, JoyReels, RaptDrama)
  * Desain iOS Glassmorphism Premium & Auto-Next Episode Player
  * Crafted with love by Lody for ZanTV.
@@ -558,6 +558,26 @@
     if (groups) groups.hidden = isVod;
     if (listpane) listpane.hidden = isVod;
     if (vodPane) vodPane.hidden = !isVod;
+
+    if (!isVod) {
+      // User berpindah dari VOD ke Live TV:
+      // Matikan pemutaran VOD (Dracin) agar player kembali bersih ke mode TV normal
+      if (window.ZanTV && typeof window.ZanTV.stopVod === 'function') {
+        window.ZanTV.stopVod();
+      }
+      // Pada mobile, scroll kembali ke paling atas agar daftar channel langsung terlihat
+      if (window.innerWidth <= 860) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    } else {
+      // User berpindah ke VOD:
+      // Pada mobile jika Live TV sedang memutar, matikan agar layar lega untuk eksplorasi drama
+      if (window.innerWidth <= 860 && window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
+        if (!window.ZanTV.isPlayingVod()) {
+          window.ZanTV.stopPlayback();
+        }
+      }
+    }
 
     if (window.ZanTV && typeof window.ZanTV.updateVideoAspect === 'function') {
       window.ZanTV.updateVideoAspect();

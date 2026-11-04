@@ -1561,6 +1561,7 @@ function play(ch, opts) {
   el.idle.hidden = true;
   setBusy(true);
   el.stage.classList.add('is-playing');
+  document.body.classList.add('is-stage-playing');
   destroyEngine();
 
   var srcIdx = (typeof opts.sourceIndex === 'number') ? opts.sourceIndex : (opts.retry ? (ch._sourceIndex || 0) : 0);
@@ -1787,10 +1788,51 @@ el.video.addEventListener('ended', function () {
     if (hasNext) toast('Memutar episode berikutnya...');
   }
 });
+function stopPlayback(opts) {
+  opts = opts || {};
+  E.token++;
+  destroyEngine();
+  try {
+    el.video.pause();
+    el.video.removeAttribute('src');
+    el.video.load();
+  } catch (e) {}
+  S.playing = null;
+  S.cued = null;
+  E.hasPlayed = false;
+  el.idle.hidden = false;
+  hideMsg();
+  setBusy(false);
+  el.stage.classList.remove('is-playing', 'is-vertical', 'is-fit-cover');
+  document.body.classList.remove('is-stage-playing', 'is-stage-vertical');
+  if (el.favBtn) el.favBtn.hidden = false;
+  var fitBtn = $('#fitBtn');
+  if (fitBtn) { fitBtn.hidden = true; fitBtn.classList.remove('is-active'); }
+  var wmBadge = $('#wmBadge');
+  if (wmBadge) wmBadge.textContent = 'HD';
+  updateNow();
+  if (isFullscreen()) {
+    exitFullscreen();
+  }
+}
+
+function stopVod() {
+  if (S.playing && (S.playing.isVod || S.playing.group === 'Short Drama' || document.body.classList.contains('is-vod-mode'))) {
+    stopPlayback();
+    return true;
+  }
+  return false;
+}
+
 window.ZanTV = {
   playVod: function (vodCh) { play(vodCh); },
   playChannel: play,
-  updateVideoAspect: updateVideoAspect
+  updateVideoAspect: updateVideoAspect,
+  stopPlayback: stopPlayback,
+  stopVod: stopVod,
+  isPlayingVod: function () {
+    return !!(S.playing && (S.playing.isVod || S.playing.group === 'Short Drama'));
+  }
 };
 
 /* ------------------------------------------------------------------ */
@@ -2753,6 +2795,14 @@ if (wm) {
     }
   });
 }
+var closeBtn = $('#stageCloseBtn');
+if (closeBtn) {
+  closeBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    stopPlayback();
+    toast('Pemutar ditutup');
+  });
+}
 function toggleFitMode() {
   var isCover = el.stage.classList.toggle('is-fit-cover');
   var btn = $('#fitBtn');
@@ -3551,7 +3601,8 @@ function onLoggedOut(reasonMsg) {
   S.playing = null; S.cued = null; S.channels = []; S.raw = []; S.hidden = 0; S.view = []; S.playlists = [];
   EPG = { meta: null, channels: {}, chNames: {}, aliases: {} };
   el.idle.hidden = false; hideMsg(); setBusy(false);
-  el.stage.classList.remove('is-playing');
+  el.stage.classList.remove('is-playing', 'is-vertical', 'is-fit-cover');
+  document.body.classList.remove('is-stage-playing', 'is-stage-vertical');
   if (el.dialog.open) el.dialog.close();
   if (acct.open) acct.close();
   if (actDlg.open) actDlg.close();
