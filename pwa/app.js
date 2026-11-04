@@ -75,24 +75,92 @@ function parseHeaderPairs(str, cb) {
   });
 }
 
+function parseClearKeys(str) {
+  if (!str) return null;
+  str = String(str).trim();
+  var out = {};
+  if (str.startsWith('{') && str.endsWith('}')) {
+    try {
+      var obj = JSON.parse(str);
+      if (obj.keys && Array.isArray(obj.keys)) {
+        obj.keys.forEach(function (k) { if (k.kid && k.k) out[k.kid] = k.k; });
+      } else {
+        Object.keys(obj).forEach(function (k) { out[k] = obj[k]; });
+      }
+      if (Object.keys(out).length) return out;
+    } catch (e) {}
+  }
+  var pairs = str.split(/[,;\s]+/);
+  for (var i = 0; i < pairs.length; i++) {
+    var p = pairs[i].trim();
+    if (!p) continue;
+    var colon = p.indexOf(':');
+    if (colon > 0 && colon < p.length - 1) {
+      var kid = p.slice(0, colon).trim().replace(/-/g, '').toLowerCase();
+      var key = p.slice(colon + 1).trim().replace(/-/g, '').toLowerCase();
+      if (/^[0-9a-f]{16,64}$/.test(kid) && /^[0-9a-f]{16,64}$/.test(key)) {
+        out[kid] = key;
+      }
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function hexToBase64Url(hex) {
+  try {
+    var clean = String(hex || '').replace(/[^0-9a-fA-F]/g, '');
+    if (!clean || clean.length % 2 !== 0) return '';
+    var bytes = [];
+    for (var i = 0; i < clean.length; i += 2) {
+      bytes.push(String.fromCharCode(parseInt(clean.slice(i, i + 2), 16)));
+    }
+    return btoa(bytes.join('')).replace(/=/g, '').replace(/\//g, '_').replace(/\+/g, '-');
+  } catch (e) {
+    return '';
+  }
+}
+
+function buildDashClearKeys(clearKeys) {
+  if (!clearKeys) return null;
+  var out = {};
+  Object.keys(clearKeys).forEach(function (rawKid) {
+    var rawKey = clearKeys[rawKid];
+    var kidClean = String(rawKid).replace(/-/g, '').trim();
+    var keyClean = String(rawKey).replace(/-/g, '').trim();
+    var kidB64 = hexToBase64Url(kidClean);
+    var keyB64 = hexToBase64Url(keyClean);
+    if (kidB64 && keyB64) out[kidB64] = keyB64;
+    if (keyB64) {
+      out[kidClean.toLowerCase()] = keyB64;
+      out[kidClean.toUpperCase()] = keyB64;
+    }
+    if (kidClean && keyClean) {
+      out[kidClean] = keyClean;
+    }
+  });
+  return Object.keys(out).length ? out : null;
+}
+
 function parseM3U(text, pl) {
   var lines = String(text).replace(/\r/g, '').split('\n');
   var out = [];
   var defUa = (pl && pl.userAgent) || '';
   var defRef = (pl && pl.referer) || '';
-  var attrs = {}, name = null, ua = null, ref = null, org = null, drm = false;
+  var attrs = {}, name = null, ua = null, ref = null, org = null, drm = false, clearKeys = null;
   var attrRe = /([\w-]+)="([^"]*)"/g;
+  var lastChannel = null;
 
-  function reset() { attrs = {}; name = null; ua = null; ref = null; org = null; drm = false; }
+  function reset() {
+    attrs = {}; name = null; ua = null; ref = null; org = null; drm = false; clearKeys = null;
+  }
 
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim();
     if (!line) continue;
 
     if (line.indexOf('#EXTINF') === 0) {
-      var keepDrm = drm, keepUa = ua, keepRef = ref, keepOrg = org;
       reset();
-      drm = keepDrm; ua = keepUa; ref = keepRef; org = keepOrg;
+      lastChannel = null;
       var m;
       attrRe.lastIndex = 0;
       while ((m = attrRe.exec(line))) attrs[m[1].toLowerCase()] = m[2];
@@ -120,40 +188,78 @@ function parseM3U(text, pl) {
           else if (key === 'referer' || key === 'referrer') ref = val;
           else if (key === 'origin') org = val;
         });
+      } else if (/^#KODIPROP:.*inputstream\.adaptive\.license_key=/i.test(line)) {
+        var lk = line.slice(line.indexOf('=') + 1).trim();
+        var parsedCk = parseClearKeys(lk);
+        if (parsedCk) {
+          clearKeys = Object.assign(clearKeys || {}, parsedCk);
+          drm = false;
+        } else {
+          drm = true;
+        }
+      } else if (/^#KODIPROP:.*inputstream\.adaptive\.license_type=(org\.w3\.clearkey|clearkey)/i.test(line)) {
+        drm = false;
       } else if (/^#KODIPROP:.*(license_type|license_key|drm)/i.test(line)) {
         drm = true;
       }
       continue;
     } else {
       var url = line, pipe = url.indexOf('|');
+      var lineUa = ua, lineRef = ref, lineOrg = org, lineClearKeys = clearKeys;
       if (pipe > 0) {
         var extra = url.slice(pipe + 1);
         url = url.slice(0, pipe);
         parseHeaderPairs(extra, function (key, val) {
-          if (key === 'user-agent') ua = val;
-          else if (key === 'referer' || key === 'referrer') ref = val;
-          else if (key === 'origin') org = val;
+          if (key === 'user-agent') lineUa = val;
+          else if (key === 'referer' || key === 'referrer') lineRef = val;
+          else if (key === 'origin') lineOrg = val;
+          else if (key === 'license_key' || key.endsWith('license_key')) {
+            var parsedCk = parseClearKeys(val);
+            if (parsedCk) {
+              lineClearKeys = Object.assign(lineClearKeys || {}, parsedCk);
+              drm = false;
+            }
+          }
         });
       }
-      if (!/^(https?|rtmp|rtsp|udp|file):|^\/\//i.test(url)) { reset(); continue; }
-      var finalUa = ua || defUa || '';
-      var finalRef = ref || defRef || '';
-      var finalOrg = org || '';
-      var group = String(attrs['group-title'] || '').split(';')[0].trim() || 'Lainnya';
-      out.push({
-        no: out.length + 1,
-        name: name || attrs['tvg-name'] || url,
+      if (!/^(https?|rtmp|rtsp|udp|file):|^\/\//i.test(url)) { continue; }
+      var finalUa = lineUa || defUa || '';
+      var finalRef = lineRef || defRef || '';
+      var finalOrg = lineOrg || '';
+      var srcObj = {
         url: url,
-        logo: attrs['tvg-logo'] || '',
-        group: group,
-        tvgId: attrs['tvg-id'] || '',
         ua: finalUa,
         ref: finalRef,
         origin: finalOrg,
-        needsHeaders: !!(finalUa || finalRef || finalOrg),
-        drm: drm
-      });
-      reset();
+        clearKeys: lineClearKeys ? Object.assign({}, lineClearKeys) : null
+      };
+
+      if (lastChannel) {
+        lastChannel.sources.push(srcObj);
+        if (!lastChannel.clearKeys && lineClearKeys) {
+          lastChannel.clearKeys = Object.assign({}, lineClearKeys);
+          lastChannel.drm = false;
+        }
+      } else {
+        var group = String(attrs['group-title'] || '').split(';')[0].trim() || 'Lainnya';
+        var ch = {
+          no: out.length + 1,
+          name: name || attrs['tvg-name'] || url,
+          url: url,
+          logo: attrs['tvg-logo'] || '',
+          group: group,
+          tvgId: attrs['tvg-id'] || '',
+          ua: finalUa,
+          ref: finalRef,
+          origin: finalOrg,
+          needsHeaders: !!(finalUa || finalRef || finalOrg),
+          drm: drm,
+          clearKeys: lineClearKeys ? Object.assign({}, lineClearKeys) : null,
+          sources: [srcObj]
+        };
+        out.push(ch);
+        lastChannel = ch;
+      }
     }
   }
   return out;
@@ -373,7 +479,10 @@ var BLOCKED = LS.get('blocked', {}); // { url: 'drm' | 'geo' }
 S.raw = [];
 S.hidden = 0;
 
-function isBlocked(c) { return !!c.drm || !!BLOCKED[c.url]; }
+function isBlocked(c) {
+  if (c.clearKeys && Object.keys(c.clearKeys).length) return false;
+  return !!c.drm || !!BLOCKED[c.url];
+}
 
 function filterBlocked(list) {
   var out = [];
@@ -762,7 +871,7 @@ el.list.addEventListener('error', function (e) {
 /* ------------------------------------------------------------------ */
 var LIBS = {
   hls: 'vendor/hls-1.7.3.min.js',
-  dash: 'vendor/dash-5.2.1.mediaplayer.min.js',
+  dash: 'vendor/dash-5.2.1.all.min.js',
   mpegts: 'vendor/mpegts-1.8.2.js'
 };
 var libPromises = {};
@@ -982,11 +1091,24 @@ function startHls(url, token) {
   });
 }
 
-function startDash(url, token) {
+function startDash(url, token, ch, currentClearKeys) {
   return loadLib('dash').then(function () {
     if (token !== E.token) return;
     var p = dashjs.MediaPlayer().create();
     E.dash = p; E.mode = 'dash';
+
+    var keys = currentClearKeys || (ch && ch.clearKeys);
+    if (keys) {
+      var ck = buildDashClearKeys(keys);
+      if (ck) {
+        p.setProtectionData({
+          'org.w3.clearkey': {
+            clearkeys: ck
+          }
+        });
+      }
+    }
+
     p.on(dashjs.MediaPlayer.events.ERROR, function (e) {
       if (token !== E.token) return;
       var err = e && e.error ? e.error : e;
@@ -994,11 +1116,7 @@ function startDash(url, token) {
       var drm = /protect|key ?system|licen|drm|eme|encrypt/i.test(msg);
       fail({ kind: drm ? 'drm' : 'network', detail: msg }, token);
     });
-    p.on(dashjs.MediaPlayer.events.MANIFEST_LOADED, function (ev) {
-      var protectedStream = false;
-      try { protectedStream = /contentprotection/i.test(JSON.stringify(ev && ev.data ? ev.data : {})); } catch (x) {}
-      if (protectedStream && token === E.token) fail({ kind: 'drm' }, token);
-    });
+
     p.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, function () {
       if (token !== E.token) return;
       try {
@@ -1074,6 +1192,7 @@ function streamProxyUrl(rawUrl, ch, serverQ) {
 
 function play(ch, opts) {
   opts = opts || {};
+  if (!ch) return;
   var token = ++E.token;
   if (!opts.retry) E.retries = 0;
   E.tsFallback = false;
@@ -1087,16 +1206,43 @@ function play(ch, opts) {
   el.stage.classList.add('is-playing');
   destroyEngine();
 
-  var kind = kindOf(ch.url);
-  var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
-  var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(ch.url);
+  var srcIdx = (typeof opts.sourceIndex === 'number') ? opts.sourceIndex : (ch._sourceIndex || 0);
+  if (!ch.sources || !ch.sources.length) {
+    ch.sources = [{
+      url: ch.url,
+      ua: ch.ua || '',
+      ref: ch.ref || '',
+      origin: ch.origin || '',
+      clearKeys: ch.clearKeys || null
+    }];
+  }
+  if (srcIdx >= ch.sources.length) srcIdx = 0;
+  ch._sourceIndex = srcIdx;
+  var activeSrc = ch.sources[srcIdx];
+  var currentUrl = activeSrc.url || ch.url;
+  var currentUa = activeSrc.ua || ch.ua || '';
+  var currentRef = activeSrc.ref || ch.ref || '';
+  var currentOrg = activeSrc.origin || ch.origin || '';
+  var currentClearKeys = activeSrc.clearKeys || ch.clearKeys || null;
+  var currentNeedsHeaders = !!(currentUa || currentRef || currentOrg);
+
+  var kind = kindOf(currentUrl);
+  var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(currentUrl);
+  var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(currentUrl);
   // Hanya gunakan forceServerQ jika sudah diverifikasi lewat preflight probe
   var wantServerQ = (opts.forceServerQ && !opts.noTranscode) ? opts.forceServerQ : 0;
-  var useProxy = !!(wantServerQ || opts.viaProxy || ch.needsHeaders || isHttpOnHttps || isTsOrStalker) && kind !== 'unsupported' && kind !== 'dash';
+  var useProxy = !!(wantServerQ || opts.viaProxy || currentNeedsHeaders || isHttpOnHttps || isTsOrStalker) && kind !== 'unsupported';
   E.viaProxy = useProxy;
   E.serverTranscode = !!wantServerQ;
   QUAL.serverQ = wantServerQ;
-  var url = useProxy ? streamProxyUrl(ch.url, ch, wantServerQ) : upgradeUrl(ch.url);
+  var streamObj = {
+    url: currentUrl,
+    ua: currentUa,
+    ref: currentRef,
+    origin: currentOrg,
+    clearKeys: currentClearKeys
+  };
+  var url = useProxy ? streamProxyUrl(currentUrl, streamObj, wantServerQ) : upgradeUrl(currentUrl);
   if (wantServerQ) {
     kind = 'mpegts';
     QUAL.activeHeight = wantServerQ;
@@ -1106,7 +1252,7 @@ function play(ch, opts) {
   var start;
   if (kind === 'unsupported') start = Promise.reject({ kind: 'unsupported' });
   else if (kind === 'hls') start = startHls(url, token);
-  else if (kind === 'dash') start = startDash(url, token);
+  else if (kind === 'dash') start = startDash(url, token, ch, currentClearKeys);
   else if (kind === 'flv' || kind === 'mpegts') start = startTs(url, kind, token);
   else { startNative(url); start = Promise.resolve(); }
 
@@ -1141,14 +1287,28 @@ function fail(info, token) {
     E.serverTranscode = false;
     QUAL.serverQ = 0;
     el.nowMeta.textContent = 'Kompresi server tidak tersedia untuk channel ini, kembali ke jalur langsung…';
-    play(S.playing, { retry: true, viaProxy: false, noTranscode: true });
+    play(S.playing, { retry: true, viaProxy: false, noTranscode: true, sourceIndex: S.playing._sourceIndex });
     return;
   }
-  if (!E.viaProxy && S.playing && info.kind !== 'drm' && info.kind !== 'unsupported' && info.kind !== 'lib' && kindOf(S.playing.url) !== 'dash') {
+  if (!E.viaProxy && S.playing && info.kind !== 'drm' && info.kind !== 'unsupported' && info.kind !== 'lib') {
     el.nowMeta.textContent = 'Mencoba memutar lewat jalur relay server…';
-    play(S.playing, { retry: true, viaProxy: true });
+    play(S.playing, { retry: true, viaProxy: true, sourceIndex: S.playing._sourceIndex });
     return;
   }
+
+  // Multi-source fallback jika channel punya alternatif server / mirror stream
+  if (S.playing && S.playing.sources && S.playing.sources.length > 1) {
+    var curIdx = S.playing._sourceIndex || 0;
+    if (curIdx + 1 < S.playing.sources.length) {
+      var nextIdx = curIdx + 1;
+      S.playing._sourceIndex = nextIdx;
+      el.nowMeta.textContent = 'Server ' + (curIdx + 1) + ' gagal, mencoba Server ' + (nextIdx + 1) + ' dari ' + S.playing.sources.length + '…';
+      toast('Server ' + (curIdx + 1) + ' gagal, beralih ke Server ' + (nextIdx + 1) + '…');
+      play(S.playing, { retry: true, viaProxy: false, sourceIndex: nextIdx });
+      return;
+    }
+  }
+
   var lock = lockReason(info);
   var hopeless = !!lock || info.kind === 'unsupported' || info.kind === 'lib' ||
     info.code === 404 || info.code === 410;
@@ -1156,7 +1316,7 @@ function fail(info, token) {
     E.retries++;
     var ch = S.playing;
     el.nowMeta.textContent = 'Sinyal terputus, mencoba lagi (' + E.retries + ' dari 2)…';
-    setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy }); }, 2500 * E.retries);
+    setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy, sourceIndex: ch._sourceIndex }); }, 2500 * E.retries);
     return;
   }
   destroyEngine();
@@ -1174,7 +1334,7 @@ function fail(info, token) {
 
 function explain(info, ch) {
   var mixed = !E.viaProxy && location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
-  if (info.kind === 'drm') return { title: 'Channel ini terenkripsi', body: 'Stream ini dilindungi DRM oleh pemilik hak siar, jadi tidak bisa diputar di ZanTV.' };
+  if (info.kind === 'drm') return { title: 'Channel ini terenkripsi (DRM)', body: 'Stream ini dilindungi enkripsi DRM tanpa kunci (ClearKey) yang valid di playlist.' };
   if (info.kind === 'lib') return { title: 'Komponen pemutar gagal dimuat', body: 'Periksa koneksi internet lalu coba lagi.' };
   if (info.kind === 'unsupported') return { title: 'Format ini tidak didukung browser', body: 'Alamat seperti rtmp:// atau udp:// tidak bisa diputar di browser. Coba buka di VLC.' };
   if (info.code === 511) return { title: 'Token sesi stream dikunci server (511)', body: 'Server Stalker/IPTV menolak sambungan ulang karena play_token bersifat sekali-pakai atau batas 1 koneksi aktif per MAC sedang terpakai. Klik Coba lagi.' };
@@ -1430,6 +1590,21 @@ function renderQualMenu() {
       (it.tag ? '<small>' + esc(it.tag) + '</small>' : '') +
     '</button>';
   }).join('');
+
+  if (S.playing && S.playing.sources && S.playing.sources.length > 1) {
+    var curSrc = S.playing._sourceIndex || 0;
+    var serverHtml = '<div class="player-pop-divider"><span>Pilih Server / Mirror</span></div>' +
+      S.playing.sources.map(function (s, idx) {
+        var isAct = idx === curSrc;
+        var sKind = kindOf(s.url).toUpperCase();
+        if (s.clearKeys) sKind += ' · ClearKey';
+        return '<button type="button" class="player-pop-opt" data-source-idx="' + idx + '" aria-checked="' + String(isAct) + '">' +
+          '<span>Server ' + (idx + 1) + '</span>' +
+          '<small>' + esc(sKind) + '</small>' +
+        '</button>';
+      }).join('');
+    box.innerHTML += serverHtml;
+  }
 }
 
 function selectQualityOption(qmode, level, sq) {
@@ -1757,6 +1932,9 @@ function showOSD(ch, digits) {
   el.osdNo.textContent = digits != null ? digits : ch.no;
   var label = digits != null ? (ch ? ch.name : '') : ch.name;
   if (digits == null && ch) {
+    if (ch.sources && ch.sources.length > 1) {
+      label += ' (Server ' + ((ch._sourceIndex || 0) + 1) + '/' + ch.sources.length + ')';
+    }
     var en = epgNowNext(ch);
     if (en && en.cur) label += ' · ' + en.cur.title;
   }
@@ -2170,6 +2348,16 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
   }
   if (qualList) {
     qualList.addEventListener('click', function (e) {
+      var sBtn = e.target.closest('[data-source-idx]');
+      if (sBtn) {
+        var sIdx = parseInt(sBtn.getAttribute('data-source-idx') || '0', 10);
+        if (S.playing) {
+          toast('Beralih ke Server ' + (sIdx + 1) + '…');
+          play(S.playing, { sourceIndex: sIdx });
+        }
+        if (qualMenu) qualMenu.hidden = true;
+        return;
+      }
       var b = e.target.closest('[data-qmode]');
       if (!b) return;
       var qmode = b.getAttribute('data-qmode') || 'auto';

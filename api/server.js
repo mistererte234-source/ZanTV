@@ -1218,6 +1218,8 @@ async function handle(req, res) {
         res.writeHead(200, {
           'Content-Type': 'video/mp2t',
           'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': '*',
           'X-Accel-Buffering': 'no'
         });
         const ff = startFfmpegPipe(q, target.toString(), chosenUa);
@@ -1237,6 +1239,8 @@ async function handle(req, res) {
         res.writeHead(200, {
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
           'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': '*',
           'X-Accel-Buffering': 'no'
         });
         return res.end(rewritten);
@@ -1244,6 +1248,8 @@ async function handle(req, res) {
       res.writeHead(upRes.status, {
         'Content-Type': ct || 'application/octet-stream',
         'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
         'X-Accel-Buffering': 'no'
       });
       return res.end(buf);
@@ -1257,6 +1263,8 @@ async function handle(req, res) {
         'Pragma': 'no-cache',
         'Expires': '0',
         'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
         'X-Accel-Buffering': 'no'
       });
       if (typeof res.flushHeaders === 'function') res.flushHeaders();
