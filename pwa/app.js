@@ -1534,6 +1534,12 @@ function updateVideoAspect() {
   document.body.classList.toggle('is-stage-vertical', isVert);
   var fitBtn = $('#fitBtn');
   if (fitBtn) fitBtn.hidden = !isVert;
+  if (isVert) {
+    el.liveTag.hidden = true;
+    if (el.favBtn) el.favBtn.hidden = true;
+  } else {
+    if (el.favBtn) el.favBtn.hidden = false;
+  }
 }
 
 function play(ch, opts) {
@@ -1722,7 +1728,7 @@ function hideMsg() { el.msg.hidden = true; el.stage.classList.remove('has-msg');
 /* status video */
 el.video.addEventListener('playing', function () {
   clearTimeout(E.stall); setBusy(false); E.retries = 0;
-  el.liveTag.hidden = false; syncPlay(); updateNow();
+  el.liveTag.hidden = isVerticalVideo() || !!(S.playing && S.playing.isVod); syncPlay(); updateNow();
   if (el.video.videoHeight) QUAL.activeHeight = el.video.videoHeight;
   if (QUAL.mode === 'saver' || (QUAL.mode === 'target' && QUAL.targetH > 0)) {
     applyClientEcoMode(QUAL.mode === 'saver' ? 480 : QUAL.targetH);
@@ -1901,7 +1907,11 @@ function updateQualBadge() {
     text = lh ? lh + 'p' : 'MANUAL';
     pillText = lh ? 'Dikunci ' + lh + 'p' : 'Manual';
   } else {
-    text = realH ? 'AUTO·' + realH + 'p' : 'AUTO';
+    if (window.innerWidth <= 600 || (el.stage && el.stage.classList.contains('is-vertical'))) {
+      text = realH ? realH + 'p' : 'AUTO';
+    } else {
+      text = realH ? 'AUTO·' + realH + 'p' : 'AUTO';
+    }
     pillText = realH ? 'Otomatis (' + realH + 'p aktif)' : 'Otomatis';
   }
   badge.textContent = text;
@@ -2723,8 +2733,13 @@ $('#playBtn').addEventListener('click', togglePlay);
 $('#prevBtn').addEventListener('click', function () { zap(-1); });
 $('#nextChBtn').addEventListener('click', function () { zap(1); });
 $('#muteBtn').addEventListener('click', function () { el.video.muted = !el.video.muted; if (!el.video.muted && el.video.volume === 0) el.video.volume = 1; });
-el.favBtn.addEventListener('click', toggleFav);
+if (el.favBtn) el.favBtn.addEventListener('click', toggleFav);
 $('#fsBtn').addEventListener('click', toggleFullscreen);
+var fsFloat = $('#stageFsFloat');
+if (fsFloat) fsFloat.addEventListener('click', function (e) {
+  e.stopPropagation();
+  toggleFullscreen();
+});
 function toggleFitMode() {
   var isCover = el.stage.classList.toggle('is-fit-cover');
   var btn = $('#fitBtn');

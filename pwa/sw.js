@@ -1,16 +1,16 @@
-/* Service worker ZanTV v1.7.21.
+/* Service worker ZanTV v1.7.22.
    - Halaman, CSS, dan JS: ambil dari jaringan dulu (selalu versi terbaru), cadangan dari cache saat offline.
    - Pustaka di /vendor/ (nama file berversi): dari cache dulu.
    - /api/ dan stream video tidak pernah disimpan. */
-var VERSION = 'zantv-v1.7.21';
+var VERSION = 'zantv-v1.7.22';
 var SHELL = [
   './',
   './index.html',
-  './style.css?v=1.7.21',
-  './app.js?v=1.7.21',
-  './zan-sig.js?v=1.7.21',
-  './zan-sports.js?v=1.7.21',
-  './zan-vod.js?v=1.7.21',
+  './style.css?v=1.7.22',
+  './app.js?v=1.7.22',
+  './zan-sig.js?v=1.7.22',
+  './zan-sports.js?v=1.7.22',
+  './zan-vod.js?v=1.7.22',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
