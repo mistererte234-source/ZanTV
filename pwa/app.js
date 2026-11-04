@@ -897,7 +897,7 @@ function loadLib(name) {
   return libPromises[name];
 }
 
-var E = { token: 0, retries: 0, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false, serverTranscode: false, probeAc: null };
+var E = { token: 0, retries: 0, hasPlayed: false, mode: null, hls: null, dash: null, ts: null, stall: null, tsFallback: false, nativeFallback: false, serverTranscode: false, probeAc: null };
 var savedQualMode = LS.get('qual-mode', 'auto');
 if (savedQualMode === 'server') savedQualMode = 'target';
 var QUAL = {
@@ -1204,42 +1204,62 @@ function startDash(url, token, ch, currentClearKeys) {
         }
       });
 
-      p.on(dashjs.MediaPlayer.events.MANIFEST_LOADED, function (e) {
-        if (token !== E.token) return;
+      function injectClearKeyToManifest(manifest) {
+        if (!manifest) return;
         try {
-          var manifest = e && e.data;
-          if (!manifest) return;
+          var defKidFromKeys = null;
+          if (keys) {
+            var kList = Object.keys(keys);
+            if (kList.length) defKidFromKeys = kList[0];
+          }
           var periods = Array.isArray(manifest.Period) ? manifest.Period : (manifest.Period ? [manifest.Period] : []);
           periods.forEach(function (period) {
             var adaptSets = Array.isArray(period.AdaptationSet) ? period.AdaptationSet : (period.AdaptationSet ? [period.AdaptationSet] : []);
             adaptSets.forEach(function (as) {
-              if (!as.ContentProtection) as.ContentProtection = [];
-              var cpList = Array.isArray(as.ContentProtection) ? as.ContentProtection : [as.ContentProtection];
-              var hasClearKey = cpList.some(function (cp) {
-                var uri = String((cp && cp.schemeIdUri) || '').toLowerCase();
-                return uri.includes('1077efec') || uri.includes('e2719d58') || uri.includes('clearkey');
+              var reps = Array.isArray(as.Representation) ? as.Representation : (as.Representation ? [as.Representation] : []);
+              var defKid = defKidFromKeys;
+              var allCps = [].concat(as.ContentProtection || []);
+              reps.forEach(function (r) { if (r.ContentProtection) allCps = allCps.concat(r.ContentProtection); });
+              allCps.forEach(function (cp) {
+                if (cp && (cp['cenc:default_KID'] || cp.cencDefaultKid || cp.default_KID)) {
+                  defKid = cp['cenc:default_KID'] || cp.cencDefaultKid || cp.default_KID;
+                }
               });
-              if (!hasClearKey) {
-                var defKid = null;
-                cpList.forEach(function (cp) {
-                  if (cp && (cp['cenc:default_KID'] || cp.cencDefaultKid || cp.default_KID)) {
-                    defKid = cp['cenc:default_KID'] || cp.cencDefaultKid || cp.default_KID;
-                  }
+
+              var targets = [as].concat(reps);
+              targets.forEach(function (t) {
+                if (!t.ContentProtection) t.ContentProtection = [];
+                var cpList = Array.isArray(t.ContentProtection) ? t.ContentProtection : [t.ContentProtection];
+                var hasClearKey = cpList.some(function (cp) {
+                  var uri = String((cp && cp.schemeIdUri) || '').toLowerCase();
+                  return uri.includes('1077efec') || uri.includes('e2719d58') || uri.includes('clearkey');
                 });
-                as.ContentProtection.unshift({
-                  schemeIdUri: 'urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b',
-                  value: 'ClearKey',
-                  cencDefaultKid: defKid
-                });
-                as.ContentProtection.unshift({
-                  schemeIdUri: 'urn:uuid:e2719d58-a985-b3c9-781a-b030e4d41fa6',
-                  value: 'ClearKey',
-                  cencDefaultKid: defKid
-                });
-              }
+                if (!hasClearKey) {
+                  t.ContentProtection.unshift({
+                    schemeIdUri: 'urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b',
+                    value: 'ClearKey',
+                    cencDefaultKid: defKid
+                  });
+                  t.ContentProtection.unshift({
+                    schemeIdUri: 'urn:uuid:e2719d58-a985-b3c9-781a-b030e4d41fa6',
+                    value: 'ClearKey',
+                    cencDefaultKid: defKid
+                  });
+                }
+              });
             });
           });
         } catch (err) {}
+      }
+
+      p.on(dashjs.MediaPlayer.events.MANIFEST_LOADED, function (e) {
+        if (token !== E.token) return;
+        injectClearKeyToManifest(e && e.data);
+      });
+
+      p.on(dashjs.MediaPlayer.events.MANIFEST_UPDATED, function (e) {
+        if (token !== E.token) return;
+        injectClearKeyToManifest(e && e.manifest);
       });
     }
 
@@ -1273,6 +1293,10 @@ function startDash(url, token, ch, currentClearKeys) {
       var err = e && e.error ? e.error : e;
       var msg = String((err && (err.message || err.code)) || '');
       var drm = /protect|key ?system|licen|drm|eme|encrypt/i.test(msg);
+      // Jika video sudah pernah jalan, jangan putus pada error download segmen tunggal (biarkan dash.js retry internal)
+      if (E.hasPlayed && !drm && (err && (err.code === 27 || err.code === 25 || /download|fragment/i.test(msg)))) {
+        return;
+      }
       fail({ kind: drm ? 'drm' : 'network', detail: msg }, token);
     });
 
@@ -1353,7 +1377,7 @@ function play(ch, opts) {
   opts = opts || {};
   if (!ch) return;
   var token = ++E.token;
-  if (!opts.retry) E.retries = 0;
+  if (!opts.retry) { E.retries = 0; E.hasPlayed = false; }
   E.tsFallback = false;
   E.nativeFallback = false;
   S.playing = ch; S.cued = null;
@@ -1450,13 +1474,19 @@ function fail(info, token) {
     return;
   }
   if (!E.viaProxy && S.playing && info.kind !== 'drm' && info.kind !== 'unsupported' && info.kind !== 'lib') {
-    el.nowMeta.textContent = 'Mencoba memutar lewat jalur relay server…';
-    play(S.playing, { retry: true, viaProxy: true, sourceIndex: S.playing._sourceIndex });
-    return;
+    var curUrl = (S.playing.sources && S.playing.sources[S.playing._sourceIndex || 0]) ? S.playing.sources[S.playing._sourceIndex || 0].url : S.playing.url;
+    // Jangan relay stream DASH (.mpd) lewat /api/stream karena proxy server tidak merender segmen anak XML
+    if (kindOf(curUrl) !== 'dash') {
+      el.nowMeta.textContent = 'Mencoba memutar lewat jalur relay server…';
+      play(S.playing, { retry: true, viaProxy: true, sourceIndex: S.playing._sourceIndex });
+      return;
+    }
   }
 
   // Multi-source fallback jika channel punya alternatif server / mirror stream
-  if (S.playing && S.playing.sources && S.playing.sources.length > 1) {
+  // JANGAN otomatis pindah ke server backup jika stream saat ini SUDAH PERNAH JALAN (E.hasPlayed === true)
+  // karena server cadangan seringkali link mati/expired (misal otttv.pw Rusia). Prioritaskan reconnect stream utama!
+  if (!E.hasPlayed && S.playing && S.playing.sources && S.playing.sources.length > 1) {
     var curIdx = S.playing._sourceIndex || 0;
     if (curIdx + 1 < S.playing.sources.length) {
       var nextIdx = curIdx + 1;
@@ -1471,11 +1501,11 @@ function fail(info, token) {
   var lock = lockReason(info);
   var hopeless = !!lock || info.kind === 'unsupported' || info.kind === 'lib' ||
     info.code === 404 || info.code === 410;
-  if (!hopeless && E.retries < 2) {
+  if (!hopeless && E.retries < 3) {
     E.retries++;
     var ch = S.playing;
-    el.nowMeta.textContent = 'Sinyal terputus, mencoba lagi (' + E.retries + ' dari 2)…';
-    setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy, sourceIndex: ch._sourceIndex }); }, 2500 * E.retries);
+    el.nowMeta.textContent = 'Sinyal terputus, menyambungkan ulang Server ' + ((ch._sourceIndex || 0) + 1) + ' (' + E.retries + ' dari 3)…';
+    setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy, sourceIndex: ch._sourceIndex }); }, 1500 * E.retries);
     return;
   }
   destroyEngine();
