@@ -1540,6 +1540,10 @@ function updateVideoAspect() {
   } else {
     if (el.favBtn) el.favBtn.hidden = false;
   }
+  var wmBadge = $('#wmBadge');
+  if (wmBadge) {
+    wmBadge.textContent = (isVert || (S.playing && S.playing.isVod)) ? 'VOD' : 'HD';
+  }
 }
 
 function play(ch, opts) {
@@ -2735,11 +2739,19 @@ $('#nextChBtn').addEventListener('click', function () { zap(1); });
 $('#muteBtn').addEventListener('click', function () { el.video.muted = !el.video.muted; if (!el.video.muted && el.video.volume === 0) el.video.volume = 1; });
 if (el.favBtn) el.favBtn.addEventListener('click', toggleFav);
 $('#fsBtn').addEventListener('click', toggleFullscreen);
-var fsFloat = $('#stageFsFloat');
-if (fsFloat) fsFloat.addEventListener('click', function (e) {
-  e.stopPropagation();
-  toggleFullscreen();
-});
+var wm = $('#stageWatermark');
+if (wm) {
+  wm.addEventListener('click', function (e) {
+    e.stopPropagation();
+    toggleFullscreen();
+  });
+  wm.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleFullscreen();
+    }
+  });
+}
 function toggleFitMode() {
   var isCover = el.stage.classList.toggle('is-fit-cover');
   var btn = $('#fitBtn');
