@@ -483,9 +483,6 @@
       isVod: true,
       isMovie: true,
       isVertical: false, // 16:9 Landscape widescreen standard cinema
-      ref: (streamRes.headers && streamRes.headers.Referer) || 'https://new39.ngefilm.site/',
-      ua: (streamRes.headers && streamRes.headers['User-Agent']) || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      origin: (streamRes.headers && streamRes.headers.Origin) || '',
       sources: [
         {
           url: streamRes.streamUrl,

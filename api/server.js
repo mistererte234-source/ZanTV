@@ -1902,7 +1902,7 @@ async function handle(req, res) {
       return res.end(buf);
     }
 
-    const isLiveTs = isTsLike || ct.includes('mp2t');
+    const isLiveTs = !upRes.headers.get('content-length') && !req.headers['range'] && (isTsLike || ct.includes('mp2t'));
     if (isLiveTs) {
       res.writeHead(200, {
         'Content-Type': 'video/mp2t',
@@ -2112,6 +2112,8 @@ async function handle(req, res) {
     const outHeaders = {
       'Content-Type': upRes.headers.get('content-type') || 'video/mp2t',
       'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
       'X-Accel-Buffering': 'no'
     };
     const cl = upRes.headers.get('content-length');

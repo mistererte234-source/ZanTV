@@ -1587,14 +1587,15 @@ function play(ch, opts) {
   var currentRef = activeSrc.ref || ch.ref || '';
   var currentOrg = activeSrc.origin || ch.origin || '';
   var currentClearKeys = activeSrc.clearKeys || ch.clearKeys || null;
-  var currentNeedsHeaders = !!(currentUa || currentRef || currentOrg);
+  var isVod = !!(ch.isVod || ch.isMovie);
+  var currentNeedsHeaders = !isVod && !!(currentUa || currentRef || currentOrg);
 
   var kind = kindOf(currentUrl);
   var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(currentUrl);
   var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(currentUrl);
   // Hanya gunakan forceServerQ jika sudah diverifikasi lewat preflight probe
   var wantServerQ = (opts.forceServerQ && !opts.noTranscode) ? opts.forceServerQ : 0;
-  var useProxy = !!(wantServerQ || opts.viaProxy || currentNeedsHeaders || isHttpOnHttps || isTsOrStalker) && kind !== 'unsupported';
+  var useProxy = !!(wantServerQ || opts.viaProxy || (!isVod && (currentNeedsHeaders || isTsOrStalker)) || isHttpOnHttps) && kind !== 'unsupported';
   E.viaProxy = useProxy;
   E.serverTranscode = !!wantServerQ;
   QUAL.serverQ = wantServerQ;
