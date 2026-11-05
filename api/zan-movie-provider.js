@@ -617,8 +617,13 @@ async function extractStream(movieUrl, tabId, provId) {
         if (p8Match) {
           const dec = decryptVoeF7(p8Match[1]);
           if (dec && dec.source) {
+            let sUrl = dec.source.trim();
+            if (sUrl.startsWith('//')) sUrl = 'https:' + sUrl;
+            else if (sUrl.startsWith('/')) {
+              try { sUrl = new URL(sUrl, voeUrl).href; } catch (e) {}
+            }
             return {
-              streamUrl: dec.source,
+              streamUrl: sUrl,
               mp4Url: dec.direct_access_url || null,
               kind: 'hls',
               extractor: 'VOE',
@@ -647,8 +652,13 @@ async function extractStream(movieUrl, tabId, provId) {
           const unpacked = unpackJs(packedMatch[0]);
           const m3u8Match = /"([^"]+m3u8[^"]*)"/i.exec(unpacked || '');
           if (m3u8Match) {
+            let sUrl = m3u8Match[1].trim();
+            if (sUrl.startsWith('//')) sUrl = 'https:' + sUrl;
+            else if (sUrl.startsWith('/')) {
+              try { sUrl = new URL(sUrl, target).href; } catch (e) {}
+            }
             return {
-              streamUrl: m3u8Match[1],
+              streamUrl: sUrl,
               kind: 'hls',
               extractor: 'Morencius',
               headers: {
@@ -671,8 +681,13 @@ async function extractStream(movieUrl, tabId, provId) {
       const rawHtml = await rawRes.text();
       const m3u8Match = /(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i.exec(rawHtml);
       if (m3u8Match) {
+        let sUrl = m3u8Match[1].trim();
+        if (sUrl.startsWith('//')) sUrl = 'https:' + sUrl;
+        else if (sUrl.startsWith('/')) {
+          try { sUrl = new URL(sUrl, target).href; } catch (e) {}
+        }
         return {
-          streamUrl: m3u8Match[1],
+          streamUrl: sUrl,
           kind: 'hls',
           extractor: 'DirectHLS',
           headers: {

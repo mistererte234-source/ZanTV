@@ -556,10 +556,11 @@
     if (el.movieSheetMeta) el.movieSheetMeta.innerHTML = metaParts.join('<span style="opacity:0.4">•</span>') || '<span>Koleksi Bioskop ' + escapeHtml(provBadge) + '</span>';
 
     // Render Server Tabs
-    var servers = detail.servers || [{ id: 'p3', name: 'Server 3' }, { id: 'p1', name: 'Server 1' }];
-    var preferredServer = (progress && progress.activeServer) || M.selectedServer || 'p3';
+    var servers = (detail.servers && detail.servers.length) ? detail.servers : [{ id: 'player1', name: 'Server 1' }, { id: 'player2', name: 'Server 2' }];
+    var defaultServer = servers[0] ? servers[0].id : 'player1';
+    var preferredServer = (progress && progress.activeServer) || M.selectedServer || defaultServer;
     var hasPref = servers.some(function (s) { return s.id === preferredServer; });
-    M.selectedServer = hasPref ? preferredServer : (servers[0] ? servers[0].id : 'p3');
+    M.selectedServer = hasPref ? preferredServer : defaultServer;
 
     if (el.movieSheetServers) {
       el.movieSheetServers.innerHTML = servers.map(function (s) {
@@ -659,17 +660,20 @@
       tab: M.selectedServer
     });
 
-    // Fallback jika tab pilihan pertama gagal, coba tab cadangan (p1 atau p3)
+    // Fallback jika tab pilihan pertama gagal, coba tab cadangan lain
     if (!streamRes || !streamRes.streamUrl) {
-      var altTab = (M.selectedServer === 'p3') ? 'p1' : 'p3';
-      showToast('Mengalihkan ke server cadangan (' + altTab.toUpperCase() + ')...');
-      streamRes = await apiGet('stream', {
-        provider: targetProv,
-        url: targetUrl,
-        tab: altTab
-      });
-      if (streamRes && streamRes.streamUrl) {
-        M.selectedServer = altTab;
+      var serverList = (M.currentDetail && M.currentDetail.servers) || [];
+      var altObj = serverList.find(function (s) { return s.id !== M.selectedServer; });
+      if (altObj) {
+        showToast('Mengalihkan ke server cadangan (' + altObj.name + ')...');
+        streamRes = await apiGet('stream', {
+          provider: targetProv,
+          url: targetUrl,
+          tab: altObj.id
+        });
+        if (streamRes && streamRes.streamUrl) {
+          M.selectedServer = altObj.id;
+        }
       }
     }
 
