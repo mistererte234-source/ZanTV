@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.26">
+<link rel="stylesheet" href="style.css?v=1.7.28">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -141,7 +141,6 @@
   <section class="stagepane">
     <div class="stage" id="stage" tabindex="0" aria-label="Pemutar video. Panah atas dan bawah untuk ganti channel.">
       <video id="video" playsinline webkit-playsinline></video>
-      <iframe class="stage-movie-iframe" id="movieStageIframe" hidden allowfullscreen allow="autoplay; fullscreen; encrypted-media"></iframe>
 
       <div class="idle" id="idle">
         <svg class="idle-mark" viewBox="0 0 100 100" aria-hidden="true">
@@ -309,6 +308,7 @@
         <input id="movieSearchInput" type="search" placeholder="Cari ribuan film bioskop & TV series..." autocomplete="off">
         <button class="movie-search-clear" id="movieSearchClear" type="button" hidden aria-label="Hapus pencarian">✕</button>
       </div>
+      <button class="btn ghost movie-admin-btn" id="movieAdminBtn" type="button" title="Kelola Link Provider (Admin Only)">⚙️ Kelola Link</button>
     </div>
 
     <div class="movie-filters">
@@ -494,6 +494,9 @@
         <label>Radius maksimal izin lokasi (meter)<input id="nuGpsRadius" type="number" min="100" max="500000" step="100" value="2000"></label>
       </div>
       <button class="btn" id="nuAdd" type="button">Tambah pengguna</button>
+      
+      <h3>Provider Bioskop & Film (CloudX)</h3>
+      <div style="margin: 8px 0 16px;"><button class="btn ghost" id="acctMovieAdminBtn" type="button" style="width:100%; justify-content:center;">⚙️ Kelola Link & Provider Bioskop</button></div>
     </div>
   </div>
 </dialog>
@@ -633,12 +636,26 @@
   </div>
 </dialog>
 
+<!-- Modal Admin: Kelola Provider & Link Bioskop -->
+<dialog class="sheet wide movie-admin-dialog" id="movieAdminDialog" aria-labelledby="movieAdminTitle">
+  <form method="dialog" class="sheet-head">
+    <div>
+      <h2 id="movieAdminTitle">⚙️ Kelola Provider & Link Bioskop</h2>
+      <p class="sheet-sub">Hanya link yang diaktifkan oleh Admin yang akan ditampilkan ke pengguna biasa.</p>
+    </div>
+    <button class="ic" value="close" aria-label="Tutup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </form>
+  <div class="movie-admin-content">
+    <div class="movie-admin-list" id="movieAdminList"></div>
+  </div>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.27"></script>
-<script src="zan-sports.js?v=1.7.27"></script>
-<script src="zan-vod.js?v=1.7.27"></script>
-<script src="zan-movie.js?v=1.7.27"></script>
-<script src="app.js?v=1.7.27"></script>
+<script src="zan-sig.js?v=1.7.28"></script>
+<script src="zan-sports.js?v=1.7.28"></script>
+<script src="zan-vod.js?v=1.7.28"></script>
+<script src="zan-movie.js?v=1.7.28"></script>
+<script src="app.js?v=1.7.28"></script>
 </body>
 </html>

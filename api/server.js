@@ -65,13 +65,13 @@ const COOKIE = 'zantv_sid';
 
 /* ---------------- penyimpanan ---------------- */
 fs.mkdirSync(PL_DIR, { recursive: true, mode: 0o700 });
-let db = { users: {}, sessions: {}, playlists: [], blocked: {}, epg: null };
+let db = { users: {}, sessions: {}, playlists: [], blocked: {}, epg: null, movieProviders: {} };
 let dbMtime = 0;
 function load() {
   try {
     const st = fs.statSync(DB_FILE);
     if (st.mtimeMs === dbMtime) return;
-    db = Object.assign({ users: {}, sessions: {}, playlists: [], blocked: {}, epg: null }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+    db = Object.assign({ users: {}, sessions: {}, playlists: [], blocked: {}, epg: null, movieProviders: {} }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
     dbMtime = st.mtimeMs;
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
 }
@@ -82,6 +82,21 @@ function save() {
   dbMtime = fs.statSync(DB_FILE).mtimeMs;
 }
 load();
+
+function applyMovieProvidersConfig() {
+  if (!movieProvider || !db.movieProviders) return;
+  for (const [id, cfg] of Object.entries(db.movieProviders)) {
+    movieProvider.setProviderOverride(id, cfg);
+  }
+}
+applyMovieProvidersConfig();
+
+function isMovieProviderEnabled(provId) {
+  if (!provId) return true;
+  const cfg = db.movieProviders || {};
+  if (cfg[provId] && cfg[provId].enabled === false) return false;
+  return true;
+}
 
 /* ---------------- kata sandi & sesi ---------------- */
 function hashPassword(pw, salt) {
@@ -973,22 +988,37 @@ async function handle(req, res) {
   }
 
   /* ==========================================================================
-     ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration) - Public VOD
+     ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration) - Public & Admin
      ========================================================================== */
   if (p === '/api/movie/providers' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    return send(res, 200, { providers: movieProvider.getProvidersList() });
+    const me = sessionUser(req);
+    const isAdmin = me && me.role === 'admin';
+    return send(res, 200, {
+      isAdmin: !!isAdmin,
+      providers: movieProvider.getProvidersList(isAdmin)
+    });
   }
 
   if (p === '/api/movie/categories' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
     const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
+    const me = sessionUser(req);
+    const isAdmin = me && me.role === 'admin';
+    if (!isAdmin && !isMovieProviderEnabled(prov)) {
+      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
+    }
     return send(res, 200, { provider: prov, categories: movieProvider.getCategories(prov) });
   }
 
   if (p === '/api/movie/list' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
     const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
+    const me = sessionUser(req);
+    const isAdmin = me && me.role === 'admin';
+    if (!isAdmin && !isMovieProviderEnabled(prov)) {
+      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
+    }
     const cat = (url.searchParams.get('category') || 'terbaru').toLowerCase();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
     const cacheKey = `mov:cat:${prov}:${cat}:${page}`;
@@ -1007,6 +1037,11 @@ async function handle(req, res) {
   if (p === '/api/movie/search' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
     const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
+    const me = sessionUser(req);
+    const isAdmin = me && me.role === 'admin';
+    if (!isAdmin && !isMovieProviderEnabled(prov)) {
+      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
+    }
     const q = (url.searchParams.get('q') || '').trim();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
     if (!q) return send(res, 200, { provider: prov, query: '', page: 1, items: [] });
@@ -1026,6 +1061,11 @@ async function handle(req, res) {
   if (p === '/api/movie/detail' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
     const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
+    const me = sessionUser(req);
+    const isAdmin = me && me.role === 'admin';
+    if (!isAdmin && !isMovieProviderEnabled(prov)) {
+      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
+    }
     const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
     if (!itemUrl) return send(res, 400, { error: 'Parameter url atau id diperlukan' });
     const cacheKey = `mov:det:${prov}:${itemUrl}`;
@@ -1044,6 +1084,11 @@ async function handle(req, res) {
   if (p === '/api/movie/stream' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
     const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
+    const me = sessionUser(req);
+    const isAdmin = me && me.role === 'admin';
+    if (!isAdmin && !isMovieProviderEnabled(prov)) {
+      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
+    }
     const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
     const tab = (url.searchParams.get('tab') || 'p3').trim();
     if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
@@ -1060,6 +1105,71 @@ async function handle(req, res) {
     } catch (err) {
       return send(res, 502, { error: err.message || 'Gagal mengekstrak link stream film' });
     }
+  }
+
+  // Admin Toggle Provider ON / OFF
+  if (p === '/api/movie/admin/provider-toggle' && method === 'POST') {
+    const me = sessionUser(req);
+    if (!me || me.role !== 'admin') throw fail(403, 'Hanya admin yang boleh melakukan ini');
+    const b = await readBody(req, 4096);
+    const provId = String(b.provider || '').toLowerCase();
+    if (!movieProvider.PROVIDERS[provId]) {
+      throw fail(400, 'Provider tidak valid');
+    }
+    const enabled = Boolean(b.enabled);
+    db.movieProviders = db.movieProviders || {};
+    db.movieProviders[provId] = db.movieProviders[provId] || {};
+    db.movieProviders[provId].enabled = enabled;
+    save();
+
+    movieProvider.setProviderOverride(provId, { enabled });
+    for (const k of vodCache.keys()) {
+      if (k.startsWith(`mov:cat:${provId}:`) || k.startsWith(`mov:search:${provId}:`)) {
+        vodCache.delete(k);
+      }
+    }
+    logEvent(req, me.name, 'movie_provider_toggle', { provider: provId, enabled });
+    return send(res, 200, {
+      ok: true,
+      provider: provId,
+      enabled,
+      providers: movieProvider.getProvidersList(true)
+    });
+  }
+
+  // Admin Update Custom Mirror / Link Provider
+  if (p === '/api/movie/admin/provider-url' && method === 'POST') {
+    const me = sessionUser(req);
+    if (!me || me.role !== 'admin') throw fail(403, 'Hanya admin yang boleh melakukan ini');
+    const b = await readBody(req, 4096);
+    const provId = String(b.provider || '').toLowerCase();
+    if (!movieProvider.PROVIDERS[provId]) {
+      throw fail(400, 'Provider tidak valid');
+    }
+    const customUrl = String(b.customUrl || '').trim();
+    if (customUrl && !/^https?:\/\//i.test(customUrl)) {
+      throw fail(400, 'Alamat URL harus diawali http:// atau https://');
+    }
+    db.movieProviders = db.movieProviders || {};
+    db.movieProviders[provId] = db.movieProviders[provId] || {};
+    db.movieProviders[provId].customUrl = customUrl;
+    save();
+
+    if (customUrl) {
+      movieProvider.setProviderOverride(provId, { customUrl });
+    }
+    for (const k of vodCache.keys()) {
+      if (k.startsWith(`mov:cat:${provId}:`) || k.startsWith(`mov:search:${provId}:`)) {
+        vodCache.delete(k);
+      }
+    }
+    logEvent(req, me.name, 'movie_provider_url', { provider: provId, customUrl });
+    return send(res, 200, {
+      ok: true,
+      provider: provId,
+      activeMirror: movieProvider.PROVIDERS[provId].activeMirror,
+      providers: movieProvider.getProvidersList(true)
+    });
   }
 
   const me = sessionUser(req);

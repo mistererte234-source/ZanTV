@@ -1,4 +1,4 @@
-/* ZanTV Bioskop & Movie VOD Explorer v1.7.27
+/* ZanTV Bioskop & Movie VOD Explorer v1.7.28
  * Integrasi Multi-Provider Film Bioskop Indonesia (CloudX-V2 Scraper & Extractor)
  * Providers: Bioskop 21 (KlikXXi/Ngefilm), PusatMovie21, SarangFilm21, SaveFilm21, WGFilm21
  * Fitur: Multi-Provider Tabs, Auto-Failover Mirrors, Full 16:9 Landscape Player, Direct M3U8 & Stage Embed
@@ -59,7 +59,12 @@
     el.movieEmpty = document.getElementById('movieEmpty');
     el.movieLoadMoreWrap = document.getElementById('movieLoadMoreWrap');
     el.movieLoadMoreBtn = document.getElementById('movieLoadMoreBtn');
-    el.movieStageIframe = document.getElementById('movieStageIframe');
+
+    // Admin Dialog Elements
+    el.movieAdminBtn = document.getElementById('movieAdminBtn');
+    el.acctMovieAdminBtn = document.getElementById('acctMovieAdminBtn');
+    el.movieAdminDialog = document.getElementById('movieAdminDialog');
+    el.movieAdminList = document.getElementById('movieAdminList');
 
     // Dialog / Bottom Sheet
     el.movieSheet = document.getElementById('movieSheet');
@@ -101,6 +106,34 @@
     }
   }
 
+  async function apiPost(endpoint, data) {
+    var url = '/api/movie/' + endpoint;
+    var ac = new AbortController();
+    var timer = setTimeout(function () { ac.abort(); }, 8500);
+    try {
+      var res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(data || {}),
+        signal: ac.signal
+      });
+      clearTimeout(timer);
+      if (!res.ok) {
+        var err = await res.json().catch(function () { return {}; });
+        throw new Error(err.error || ('HTTP ' + res.status));
+      }
+      return await res.json();
+    } catch (e) {
+      clearTimeout(timer);
+      console.warn('[ZanMovie] API POST error:', endpoint, e);
+      throw e;
+    }
+  }
+
   /* ---------------- NOTIFIKASI TOAST ---------------- */
   function showToast(msg) {
     var t = document.getElementById('toast');
@@ -116,7 +149,16 @@
   /* ---------------- RENDER PROVIDER TABS ---------------- */
   function renderProviderTabs() {
     if (!el.movieProvTabs) return;
-    var list = (M.providers && M.providers.length) ? M.providers : DEFAULT_PROVIDERS;
+    var list = (M.providers && M.providers.length)
+      ? M.providers.filter(function (p) { return p.enabled !== false; })
+      : DEFAULT_PROVIDERS;
+
+    // Pastikan provider terpilih masih ada di daftar aktif
+    if (list.length && !list.some(function (p) { return p.id === M.provider; })) {
+      M.provider = list[0].id;
+      localStorage.setItem('zan_movie_prov', M.provider);
+    }
+
     el.movieProvTabs.innerHTML = list.map(function (p) {
       var active = (p.id === M.provider) ? ' is-active' : '';
       return '<button type="button" class="movie-prov-btn' + active + '" data-prov="' + p.id + '">' +
@@ -421,45 +463,13 @@
 
     closeMovieSheet();
 
-    // 1. Jika stream berupa Iframe Embed (Abyss/StreamWish embed)
+    // Jika stream berupa iframe third-party (misal ad-player), tolak agar user tidak kena iklan
     if (streamRes.kind === 'iframe') {
-      if (window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
-        window.ZanTV.stopPlayback();
-      }
-      var iframe = document.getElementById('movieStageIframe');
-      if (iframe) {
-        iframe.src = streamRes.streamUrl;
-        iframe.hidden = false;
-      }
-      var stage = document.getElementById('stage');
-      if (stage) {
-        stage.classList.add('is-playing');
-        stage.classList.remove('is-vertical');
-      }
-      var idle = document.getElementById('idle');
-      if (idle) idle.hidden = true;
-      var nowName = document.getElementById('nowName');
-      if (nowName) nowName.textContent = playTitle;
-      var nowMeta = document.getElementById('nowMeta');
-      if (nowMeta) nowMeta.textContent = (M.currentDetail && M.currentDetail.providerName) || 'Film Bioskop';
-      var closeBtn = document.getElementById('stageCloseBtn');
-      if (closeBtn) closeBtn.classList.add('show');
-
-      if (window.innerWidth <= 860 && stage) {
-        stage.scrollIntoView({ behavior: 'smooth' });
-      }
-      showToast('▶️ Memutar embed player: ' + playTitle);
+      showToast('⚠️ Stream ini memerlukan player iframe pihak ketiga yang dinonaktifkan demi bebas iklan.');
       return;
     }
 
-    // 2. Jika stream berupa direct HLS (VOE / Morencius / Direct m3u8)
-    var mIframe = document.getElementById('movieStageIframe');
-    if (mIframe) {
-      mIframe.src = 'about:blank';
-      mIframe.hidden = true;
-    }
-
-    // Bangun channel payload untuk pemutar ZanTV
+    // Bangun channel payload untuk pemutar ZanTV (Direct HLS Clean)
     var poster = (M.currentDetail && M.currentDetail.poster) || (M.currentMovie && M.currentMovie.poster) || 'icons/icon-192.png';
     var vodCh = {
       name: playTitle,
@@ -672,6 +682,155 @@
         if (e.target === el.movieSheet) closeMovieSheet();
       });
     }
+
+    // Admin Button click in Movie topbar & Account dialog
+    if (el.movieAdminBtn) {
+      el.movieAdminBtn.addEventListener('click', openMovieAdminDialog);
+    }
+    if (el.acctMovieAdminBtn) {
+      el.acctMovieAdminBtn.addEventListener('click', function () {
+        var acctDlg = document.getElementById('acctDialog');
+        if (acctDlg && typeof acctDlg.close === 'function') {
+          try { acctDlg.close(); } catch (e) {}
+        }
+        openMovieAdminDialog();
+      });
+    }
+
+    // Admin List Delegation (Toggle & Save URL)
+    if (el.movieAdminList) {
+      // Toggle Switch Provider On/Off
+      el.movieAdminList.addEventListener('change', async function (e) {
+        var toggle = e.target.closest('.movie-admin-toggle');
+        if (!toggle) return;
+        var provId = toggle.getAttribute('data-prov');
+        var isEnabled = toggle.checked;
+
+        try {
+          toggle.disabled = true;
+          await apiPost('admin/provider-toggle', { provider: provId, enabled: isEnabled });
+          toggle.disabled = false;
+
+          // Update state lokal
+          var prov = M.providers && M.providers.find(function (p) { return p.id === provId; });
+          if (prov) prov.enabled = isEnabled;
+
+          // Update pill di card
+          var card = el.movieAdminList.querySelector('[data-card-prov="' + provId + '"]');
+          if (card) {
+            var pill = card.querySelector('.movie-admin-pill');
+            if (pill) {
+              pill.className = 'movie-admin-pill ' + (isEnabled ? 'is-active' : 'is-disabled');
+              pill.textContent = isEnabled ? '🟢 Aktif' : '🔴 Nonaktif';
+            }
+          }
+
+          renderProviderTabs();
+
+          // Jika provider yang sedang dibuka dinonaktifkan, pindah ke provider lain
+          if (!isEnabled && M.provider === provId) {
+            var firstActive = M.providers.find(function (p) { return p.enabled !== false; });
+            if (firstActive) {
+              M.provider = firstActive.id;
+              localStorage.setItem('zan_movie_prov', M.provider);
+              renderProviderTabs();
+              await loadCategories();
+              loadMovies(false);
+            }
+          }
+
+          showToast((isEnabled ? '🟢 ' : '🔴 ') + (prov ? (prov.shortName || prov.name) : provId) + (isEnabled ? ' diaktifkan' : ' dinonaktifkan'));
+        } catch (err) {
+          toggle.disabled = false;
+          toggle.checked = !isEnabled; // Revert
+          showToast('❌ Gagal mengubah status provider: ' + (err.message || 'Error'));
+        }
+      });
+
+      // Simpan URL Mirror Baru
+      el.movieAdminList.addEventListener('click', async function (e) {
+        var btn = e.target.closest('.movie-admin-url-btn');
+        if (!btn) return;
+        var provId = btn.getAttribute('data-prov');
+        var input = el.movieAdminList.querySelector('.movie-admin-url-input[data-prov="' + provId + '"]');
+        if (!input) return;
+        var newUrl = input.value.trim();
+
+        try {
+          btn.disabled = true;
+          btn.textContent = 'Menyimpan...';
+          var res = await apiPost('admin/provider-url', { provider: provId, customUrl: newUrl });
+          btn.disabled = false;
+          btn.textContent = 'Tersimpan ✓';
+          setTimeout(function () { btn.textContent = 'Simpan Link'; }, 2000);
+
+          var prov = M.providers && M.providers.find(function (p) { return p.id === provId; });
+          if (prov) prov.baseUrl = (res && res.baseUrl) || newUrl;
+
+          showToast('✅ Link mirror provider ' + provId + ' berhasil disimpan');
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = 'Simpan Link';
+          showToast('❌ Gagal menyimpan URL: ' + (err.message || 'Error'));
+        }
+      });
+    }
+  }
+
+  /* ---------------- ADMIN: KELOLA PROVIDER & MIRROR ---------------- */
+  async function openMovieAdminDialog() {
+    if (!el.movieAdminDialog) return;
+
+    try {
+      var res = await apiGet('providers');
+      if (res && res.providers) {
+        M.providers = res.providers;
+      }
+    } catch (e) {
+      console.warn('[ZanMovie] Gagal refresh providers untuk admin:', e);
+    }
+
+    renderAdminDialogList();
+
+    if (typeof el.movieAdminDialog.showModal === 'function') {
+      try { el.movieAdminDialog.showModal(); } catch (e) { el.movieAdminDialog.setAttribute('open', ''); }
+    } else {
+      el.movieAdminDialog.setAttribute('open', '');
+    }
+  }
+
+  function renderAdminDialogList() {
+    if (!el.movieAdminList) return;
+    var list = M.providers || DEFAULT_PROVIDERS;
+
+    el.movieAdminList.innerHTML = list.map(function (p) {
+      var isEnabled = p.enabled !== false;
+      var activePill = isEnabled
+        ? '<span class="movie-admin-pill is-active">🟢 Aktif</span>'
+        : '<span class="movie-admin-pill is-disabled">🔴 Nonaktif</span>';
+
+      return '<div class="movie-admin-card" data-card-prov="' + escapeHtml(p.id) + '">' +
+        '<div class="movie-admin-card-head">' +
+          '<div class="movie-admin-card-info">' +
+            '<span class="movie-admin-card-icon">' + (p.icon || '🎬') + '</span>' +
+            '<div>' +
+              '<strong class="movie-admin-card-name">' + escapeHtml(p.name || p.id) + '</strong>' +
+              activePill +
+            '</div>' +
+          '</div>' +
+          '<label class="ios-switch" title="Aktifkan / Nonaktifkan sumber ini">' +
+            '<input type="checkbox" class="movie-admin-toggle" data-prov="' + escapeHtml(p.id) + '"' + (isEnabled ? ' checked' : '') + '>' +
+            '<span class="ios-slider"></span>' +
+          '</label>' +
+        '</div>' +
+        '<div class="movie-admin-card-body">' +
+          '<div class="movie-admin-url-box">' +
+            '<input type="url" class="movie-admin-url-input" data-prov="' + escapeHtml(p.id) + '" placeholder="Default: ' + escapeHtml(p.defaultUrl || p.baseUrl || '') + '" value="' + escapeHtml(p.customUrl || p.baseUrl || '') + '" autocomplete="off" spellcheck="false">' +
+            '<button type="button" class="btn ghost movie-admin-url-btn" data-prov="' + escapeHtml(p.id) + '">Simpan Link</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
   }
 
   /* ---------------- PUBLIC API EXPORTS ---------------- */
@@ -679,6 +838,7 @@
     loadMovies: loadMovies,
     openMovieDetail: openMovieDetail,
     playCurrentSelection: playCurrentSelection,
+    openAdmin: openMovieAdminDialog,
     onEnter: function () {
       if (!M.movies || !M.movies.length) {
         loadMovies(false);
@@ -689,11 +849,7 @@
                 document.body.classList.contains('is-movie-mode'));
     },
     stopMovieIframe: function () {
-      var iframe = document.getElementById('movieStageIframe');
-      if (iframe) {
-        iframe.src = 'about:blank';
-        iframe.hidden = true;
-      }
+      // No-op karena iframe ad player sudah dihilangkan sepenuhnya
     },
     getState: function () { return M; }
   };

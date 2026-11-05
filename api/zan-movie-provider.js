@@ -10,7 +10,7 @@
  *     1. VOE (F7 rot13/shift/base64) -> Direct Master M3U8
  *     2. Morencius / Dingtezuni / Movearnpre (JS Unpack) -> Direct Master M3U8
  *     3. Muvipro Query & AJAX Server Tabs
- *     4. Universal Iframe Fallback Player
+ *     4. Clean HLS Resolver (100% Ad-Free, No Ad-Iframes) v1.7.28
  * Crafted with love by Lody for ZanTV.
  */
 
@@ -37,7 +37,8 @@ const PROVIDERS = {
     name: 'Bioskop 21 (KlikXXi)',
     shortName: 'Bioskop 21',
     icon: '🎬',
-    description: 'Koleksi bioskop terlengkap & update tercepat 2026',
+    description: 'Koleksi bioskop terlengkap & 100% bebas iklan (Direct HLS)',
+    enabled: true,
     mirrors: [
       'https://new39.ngefilm.site',
       'https://klikxxi.shop',
@@ -53,7 +54,8 @@ const PROVIDERS = {
     name: 'PusatMovie21',
     shortName: 'PusatMovie',
     icon: '🌟',
-    description: 'Film box office barat & asia kualitas tinggi',
+    description: 'Film box office barat & asia (Server VOE Clean)',
+    enabled: false,
     mirrors: [
       'https://refugepdx.com'
     ],
@@ -74,6 +76,7 @@ const PROVIDERS = {
     shortName: 'SarangFilm',
     icon: '🍿',
     description: 'Gudang film bioskop & drakor populer',
+    enabled: false,
     mirrors: [
       'https://sarangfilm.diy',
       'https://sarangfilm.homes'
@@ -94,7 +97,8 @@ const PROVIDERS = {
     name: 'SaveFilm21',
     shortName: 'SaveFilm',
     icon: '💾',
-    description: 'Server stream cepat & stabil',
+    description: 'Server stream Morencius & VOE',
+    enabled: false,
     mirrors: [
       'https://new13.savefilm21info.com'
     ],
@@ -106,7 +110,8 @@ const PROVIDERS = {
     name: 'WGFilm21',
     shortName: 'WGFilm',
     icon: '⚡',
-    description: 'Alternatif bioskop streaming lancar',
+    description: 'Alternatif bioskop streaming',
+    enabled: false,
     mirrors: [
       'https://alternatif3.wgfilm21.net'
     ],
@@ -327,16 +332,36 @@ function parseArticles(html, baseUrl, provId) {
 }
 
 /* ---------------- API PUBLIK PROVIDER ---------------- */
-function getProvidersList() {
-  return Object.values(PROVIDERS).map(p => ({
-    id: p.id,
-    name: p.name,
-    shortName: p.shortName,
-    icon: p.icon,
-    description: p.description,
-    activeMirror: p.activeMirror,
-    categoriesCount: (p.categories || []).length
-  }));
+function setProviderOverride(provId, { enabled, customUrl }) {
+  if (!provId || !PROVIDERS[provId]) return;
+  if (typeof enabled === 'boolean') {
+    PROVIDERS[provId].enabled = enabled;
+  }
+  if (customUrl && typeof customUrl === 'string') {
+    const clean = customUrl.trim().replace(/\/+$/, '');
+    if (clean) {
+      PROVIDERS[provId].activeMirror = clean;
+      if (!PROVIDERS[provId].mirrors.includes(clean)) {
+        PROVIDERS[provId].mirrors.unshift(clean);
+      }
+    }
+  }
+}
+
+function getProvidersList(isAdmin = false) {
+  return Object.values(PROVIDERS)
+    .filter(p => isAdmin || p.enabled !== false)
+    .map(p => ({
+      id: p.id,
+      name: p.name,
+      shortName: p.shortName,
+      icon: p.icon,
+      description: p.description,
+      activeMirror: p.activeMirror,
+      enabled: p.enabled !== false,
+      mirrors: p.mirrors || [],
+      categoriesCount: (p.categories || []).length
+    }));
 }
 
 function getCategories(provId) {
@@ -562,114 +587,155 @@ async function extractStream(movieUrl, tabId, provId) {
     throw new Error('Video stream player not found for this title');
   }
 
-  if (iframeSrc.startsWith('//')) iframeSrc = 'https:' + iframeSrc;
+  // Helper ekstraksi M3U8 bersih (VOE / Morencius / Direct HLS)
+  async function resolveCleanHls(rawIframeUrl) {
+    if (!rawIframeUrl) return null;
+    let target = rawIframeUrl.trim();
+    if (target.startsWith('//')) target = 'https:' + target;
 
-  // 4. Resolusi VOE (Direct Master M3U8 via F7 Decryption)
-  if (iframeSrc.includes('voe.sx') || iframeSrc.includes('shannoncoldalready') || iframeSrc.includes('/e/')) {
-    try {
-      let voeUrl = iframeSrc;
-      const voeRes = await fetch(voeUrl, {
-        headers: { 'User-Agent': USER_AGENT },
-        signal: AbortSignal.timeout(4000)
-      });
-      const voeHtml = await voeRes.text();
-      const redirMatch = /window\.location\.href\s*=\s*'([^']+)'/i.exec(voeHtml);
-      if (redirMatch) voeUrl = redirMatch[1];
+    // 1. VOE (Direct Master M3U8 via F7 Decryption)
+    if (target.includes('voe.sx') || target.includes('shannoncoldalready') || target.includes('/e/')) {
+      try {
+        let voeUrl = target;
+        const voeRes = await fetch(voeUrl, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(4000) });
+        const voeHtml = await voeRes.text();
+        const redirMatch = /window\.location\.href\s*=\s*'([^']+)'/i.exec(voeHtml);
+        if (redirMatch) voeUrl = redirMatch[1];
 
-      const realVoeRes = await fetch(voeUrl, {
-        headers: {
-          'User-Agent': USER_AGENT,
-          'Referer': targetOrigin + '/'
-        },
-        signal: AbortSignal.timeout(4500)
-      });
-      const realVoeHtml = await realVoeRes.text();
-      const p8Match = /<script type="application\/json">\["([^"]+)"\]<\/script>/i.exec(realVoeHtml);
-      if (p8Match) {
-        const dec = decryptVoeF7(p8Match[1]);
-        if (dec && dec.source) {
-          return {
-            streamUrl: dec.source,
-            mp4Url: dec.direct_access_url || null,
-            kind: 'hls',
-            extractor: 'VOE',
-            title: dec.title || '',
-            headers: {
-              'User-Agent': USER_AGENT,
-              'Origin': 'https://' + new URL(voeUrl).hostname,
-              'Referer': voeUrl
-            }
-          };
+        const realVoeRes = await fetch(voeUrl, {
+          headers: { 'User-Agent': USER_AGENT, 'Referer': targetOrigin + '/' },
+          signal: AbortSignal.timeout(4500)
+        });
+        const realVoeHtml = await realVoeRes.text();
+        const p8Match = /<script type="application\/json">\["([^"]+)"\]<\/script>/i.exec(realVoeHtml);
+        if (p8Match) {
+          const dec = decryptVoeF7(p8Match[1]);
+          if (dec && dec.source) {
+            return {
+              streamUrl: dec.source,
+              mp4Url: dec.direct_access_url || null,
+              kind: 'hls',
+              extractor: 'VOE',
+              title: dec.title || '',
+              headers: {
+                'User-Agent': USER_AGENT,
+                'Origin': 'https://' + new URL(voeUrl).hostname,
+                'Referer': voeUrl
+              }
+            };
+          }
         }
-      }
-    } catch (e) {}
-  }
+      } catch (e) {}
+    }
 
-  // 5. Resolusi Morencius / Dingtezuni / Movearnpre (Direct Master M3U8 via JS Unpack)
-  if (iframeSrc.includes('morencius.com') || iframeSrc.includes('dingtezuni.com') || iframeSrc.includes('movearnpre.com')) {
+    // 2. Morencius / Dingtezuni / Movearnpre (Direct Master M3U8 via JS Unpack)
+    if (target.includes('morencius.com') || target.includes('dingtezuni.com') || target.includes('movearnpre.com')) {
+      try {
+        const res = await fetch(target, {
+          headers: { 'User-Agent': USER_AGENT, 'Referer': targetOrigin + '/' },
+          signal: AbortSignal.timeout(4000)
+        });
+        const html = await res.text();
+        const packedMatch = html.match(/eval\(function\(p,a,c,k,e,[rd]\)\{[\s\S]*?\.split\('\|'\)\)\)/);
+        if (packedMatch) {
+          const unpacked = unpackJs(packedMatch[0]);
+          const m3u8Match = /"([^"]+m3u8[^"]*)"/i.exec(unpacked || '');
+          if (m3u8Match) {
+            return {
+              streamUrl: m3u8Match[1],
+              kind: 'hls',
+              extractor: 'Morencius',
+              headers: {
+                'User-Agent': USER_AGENT,
+                'Origin': new URL(target).origin,
+                'Referer': target
+              }
+            };
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Direct M3U8 check inside iframe page
     try {
-      const res = await fetch(iframeSrc, {
+      const rawRes = await fetch(target, {
         headers: { 'User-Agent': USER_AGENT, 'Referer': targetOrigin + '/' },
-        signal: AbortSignal.timeout(4000)
+        signal: AbortSignal.timeout(3500)
       });
-      const html = await res.text();
-      const packedMatch = html.match(/eval\(function\(p,a,c,k,e,[rd]\)\{[\s\S]*?\.split\('\|'\)\)\)/);
-      if (packedMatch) {
-        const unpacked = unpackJs(packedMatch[0]);
-        const m3u8Match = /"([^"]+m3u8[^"]*)"/i.exec(unpacked || '');
-        if (m3u8Match) {
-          return {
-            streamUrl: m3u8Match[1],
-            kind: 'hls',
-            extractor: 'Morencius',
-            headers: {
-              'User-Agent': USER_AGENT,
-              'Origin': new URL(iframeSrc).origin,
-              'Referer': iframeSrc
-            }
-          };
-        }
+      const rawHtml = await rawRes.text();
+      const m3u8Match = /(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i.exec(rawHtml);
+      if (m3u8Match) {
+        return {
+          streamUrl: m3u8Match[1],
+          kind: 'hls',
+          extractor: 'DirectHLS',
+          headers: {
+            'User-Agent': USER_AGENT,
+            'Referer': target
+          }
+        };
       }
     } catch (e) {}
+
+    return null;
   }
 
-  // 6. Direct M3U8 check inside iframe page
-  try {
-    const rawRes = await fetch(iframeSrc, {
-      headers: { 'User-Agent': USER_AGENT, 'Referer': targetOrigin + '/' },
-      signal: AbortSignal.timeout(3500)
-    });
-    const rawHtml = await rawRes.text();
-    const m3u8Match = /(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i.exec(rawHtml);
-    if (m3u8Match) {
-      return {
-        streamUrl: m3u8Match[1],
-        kind: 'hls',
-        extractor: 'DirectHLS',
-        headers: {
-          'User-Agent': USER_AGENT,
-          'Referer': iframeSrc
-        }
-      };
-    }
-  } catch (e) {}
+  // Coba tab yang diminta terlebih dahulu
+  if (iframeSrc) {
+    const cleanStream = await resolveCleanHls(iframeSrc);
+    if (cleanStream) return cleanStream;
+  }
 
-  // 7. Universal Iframe Fallback Player
-  return {
-    streamUrl: iframeSrc,
-    kind: 'iframe',
-    extractor: 'Embed',
-    headers: {
-      'User-Agent': USER_AGENT,
-      'Referer': targetOrigin + '/'
+  // Auto-failover ke tab lain untuk mencari server bebas iklan (VOE / Morencius)
+  const candidateTabs = ['p3', 'player3', 'p2', 'player2', 'p1', 'player1', 'p4', 'player4'];
+  for (const tid of candidateTabs) {
+    if (tid === tabId) continue;
+    let altIframe = null;
+
+    if (tid.startsWith('player')) {
+      const pNum = tid.replace('player', '');
+      try {
+        const qUrl = `${movieUrl.split('?')[0]}?player=${pNum}`;
+        const qRes = await fetch(qUrl, { headers: { 'User-Agent': USER_AGENT, 'Referer': movieUrl }, signal: AbortSignal.timeout(3500) });
+        const qHtml = await qRes.text();
+        const ifm = /<div[^>]*class="[^"]*gmr-embed-responsive[^"]*"[^>]*>[\s\S]*?<iframe[^>]+src="([^"]+)"/i.exec(qHtml);
+        if (ifm && ifm[1]) altIframe = ifm[1];
+      } catch (e) {}
+    } else if (postId) {
+      try {
+        const p = new URLSearchParams({ action: 'muvipro_player_content', tab: tid, post_id: postId });
+        const ajaxRes = await fetch(`${targetOrigin}/wp-admin/admin-ajax.php`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'User-Agent': USER_AGENT,
+            'Referer': currentUrl || movieUrl,
+            'Origin': targetOrigin
+          },
+          body: p.toString(),
+          signal: AbortSignal.timeout(3500)
+        });
+        const ajaxHtml = await ajaxRes.text();
+        const ifm = /<iframe[^>]+src="([^"]+)"/i.exec(ajaxHtml);
+        if (ifm && ifm[1]) altIframe = ifm[1];
+      } catch (e) {}
     }
-  };
+
+    if (altIframe) {
+      const cleanStream = await resolveCleanHls(altIframe);
+      if (cleanStream) return cleanStream;
+    }
+  }
+
+  throw new Error('Stream langsung m3u8 (bebas iklan) belum tersedia pada server ini. Silakan coba judul lain.');
 }
 
 module.exports = {
   UNIVERSAL_CATEGORIES,
   PROVIDERS,
   getProvidersList,
+  setProviderOverride,
   getCategories,
   getCatalog,
   search,

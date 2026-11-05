@@ -1554,11 +1554,6 @@ function updateVideoAspect() {
 function play(ch, opts) {
   opts = opts || {};
   if (!ch) return;
-  var mIframe = document.getElementById('movieStageIframe');
-  if (mIframe) {
-    mIframe.src = 'about:blank';
-    mIframe.hidden = true;
-  }
   var token = ++E.token;
   if (!opts.retry) { E.retries = 0; E.hasPlayed = false; }
   E.tsFallback = false;
@@ -1807,11 +1802,6 @@ function stopPlayback(opts) {
     el.video.removeAttribute('src');
     el.video.load();
   } catch (e) {}
-  var mIframe = document.getElementById('movieStageIframe');
-  if (mIframe) {
-    mIframe.src = 'about:blank';
-    mIframe.hidden = true;
-  }
   S.playing = null;
   S.cued = null;
   E.hasPlayed = false;
