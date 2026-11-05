@@ -30,6 +30,19 @@ try {
   console.warn('[ZanTV] Movie provider module load warning:', e.message);
 }
 
+/* ---------------- Global VOD & Movie Cache ---------------- */
+const vodCache = global.__vodCache || (global.__vodCache = new Map());
+function getVodCache(key) {
+  const item = vodCache.get(key);
+  if (item && item.exp > Date.now()) return item.data;
+  vodCache.delete(key);
+  return null;
+}
+function setVodCache(key, data, ttlMs) {
+  if (vodCache.size > 500) vodCache.clear();
+  vodCache.set(key, { data, exp: Date.now() + (ttlMs || 900000) });
+}
+
 let HAS_FFMPEG = false;
 try {
   execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 3000 });
@@ -1218,18 +1231,7 @@ async function handle(req, res) {
     return send(res, 200, out);
   }
 
-  /* ---------------- VOD / Short Drama Aggregator & Cache ---------------- */
-  const vodCache = global.__vodCache || (global.__vodCache = new Map());
-  function getVodCache(key) {
-    const item = vodCache.get(key);
-    if (item && item.exp > Date.now()) return item.data;
-    vodCache.delete(key);
-    return null;
-  }
-  function setVodCache(key, data, ttlMs) {
-    if (vodCache.size > 300) vodCache.clear();
-    vodCache.set(key, { data, exp: Date.now() + (ttlMs || 900000) });
-  }
+
   async function fetchVodJson(upstreamUrl) {
     const r = await fetch(upstreamUrl, {
       headers: {

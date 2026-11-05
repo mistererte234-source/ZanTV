@@ -20,15 +20,15 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 const CATEGORIES = [
   { id: 'terbaru', name: '🔥 Terbaru 2026', path: 'year/2026/page/%d/' },
-  { id: 'popular', name: '⭐ Populer 2025', path: 'year/2025/page/%d/' },
+  { id: 'popular', alt: 'populer', name: '⭐ Populer 2025', path: 'year/2025/page/%d/' },
   { id: 'series', name: '📺 TV Series', path: 'tv/page/%d/' },
   { id: 'action', name: '💥 Action', path: 'category/action/page/%d/' },
   { id: 'horror', name: '👻 Horror', path: 'category/horror/page/%d/' },
-  { id: 'comedy', name: '😂 Komedi', path: 'category/comedy/page/%d/' },
+  { id: 'comedy', alt: 'komedi', name: '😂 Komedi', path: 'category/comedy/page/%d/' },
   { id: 'romance', name: '❤️ Romance', path: 'category/roman/page/%d/' },
   { id: 'scifi', name: '🚀 Sci-Fi', path: 'category/science-fiction/page/%d/' },
   { id: 'thriller', name: '🔪 Thriller', path: 'category/thriller/page/%d/' },
-  { id: 'animation', name: '🎨 Animasi', path: 'category/cartoon/page/%d/' },
+  { id: 'animation', alt: 'animasi', name: '🎨 Animasi', path: 'category/cartoon/page/%d/' },
   { id: 'drama', name: '🎭 Drama', path: 'category/drama/page/%d/' }
 ];
 
@@ -118,6 +118,19 @@ function decryptVoeF7(p8) {
   }
 }
 
+function decodeHtmlEntities(str) {
+  return String(str || '')
+    .replace(/&#8217;|&#39;|&#8216;/g, "'")
+    .replace(/&#8220;|&#8221;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (m, dec) => String.fromCharCode(dec))
+    .replace(/<[^>]+>/g, '')
+    .trim();
+}
+
 function parseArticles(html, baseUrl) {
   const items = [];
   const articleRegex = /<article[^>]*class="[^"]*(?:item-infinite|item)[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
@@ -129,7 +142,7 @@ function parseArticles(html, baseUrl) {
     if (!linkMatch) continue;
     let url = linkMatch[1];
     if (url.startsWith('/')) url = baseUrl + url;
-    const rawTitle = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+    const rawTitle = decodeHtmlEntities(linkMatch[2]);
 
     const imgMatch = /<img[^>]+(?:data-lazy-src|data-src|src)="([^"]+)"/i.exec(art);
     let poster = imgMatch ? imgMatch[1] : '';
@@ -161,7 +174,7 @@ function parseArticles(html, baseUrl) {
 async function getCatalog(catId, page) {
   page = Math.max(1, +page || 1);
   catId = (catId || 'terbaru').toLowerCase();
-  const cat = CATEGORIES.find(c => c.id === catId) || CATEGORIES[0];
+  const cat = CATEGORIES.find(c => c.id === catId || c.alt === catId) || CATEGORIES[0];
   const reqPath = cat.path.replace('%d', page);
 
   const { html, baseUrl } = await fetchFromMirrors(reqPath);
