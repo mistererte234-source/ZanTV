@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.30">
+<link rel="stylesheet" href="style.css?v=1.7.31">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -235,52 +235,54 @@
         <div class="player-pop-list" id="vodServerList"></div>
       </div>
 
-      <!-- VOD Scrubber Bar (Timeline, Durasi & Geser Menit) -->
-      <div class="stage-vod-bar" id="stageVodBar" hidden>
-        <div class="vod-scrub-wrap" id="vodScrubWrap">
-          <div class="vod-scrub-track" id="vodScrubTrack">
-            <div class="vod-scrub-buffer" id="vodScrubBuffer"></div>
-            <div class="vod-scrub-progress" id="vodScrubProgress"></div>
-            <div class="vod-scrub-thumb" id="vodScrubThumb"></div>
-          </div>
-          <input type="range" class="vod-scrub-input" id="vodScrubInput" min="0" max="100" value="0" step="0.1" aria-label="Timeline Menit Film">
-        </div>
-        <div class="vod-bar-row">
-          <div class="vod-bar-left">
-            <button class="vod-skip-btn" id="vodRewindBtn" type="button" title="Mundur 10 detik (←)" aria-label="Mundur 10 detik">
-              <svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05 1-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/><text x="12.5" y="15.5" font-size="6.5" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
-              <span>10s</span>
-            </button>
-            <button class="vod-skip-btn" id="vodForwardBtn" type="button" title="Maju 10 detik (→)" aria-label="Maju 10 detik">
-              <svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05 1 6.9 2.6L22 7v9h-9l3.62-3.62c-1.39-1.16-3.16-1.88-5.12-1.88-3.54 0-6.55 2.31-7.6 5.5l-2.37-.78C2.92 11.03 6.85 8 11.5 8z"/><text x="11.5" y="15.5" font-size="6.5" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
-              <span>10s</span>
-            </button>
-            <span class="vod-time-badge" id="vodTimeCurrent">00:00</span>
-            <span class="vod-time-sep">/</span>
-            <span class="vod-time-badge vod-time-dur" id="vodTimeDuration">--:--</span>
-          </div>
-          <div class="vod-bar-right">
-            <button class="ic ic-pill vod-server-pill" id="vodServerBtn" type="button" hidden title="Ganti Server Streaming">
-              <span class="vod-server-dot"></span>
-              <span id="vodServerLabel">Server 1</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
       <div class="controls" id="controls">
-        <button class="ic" id="prevBtn" title="Channel sebelumnya (↓)" aria-label="Channel sebelumnya"><svg viewBox="0 0 24 24"><path d="M6 6v12M18 6 9 12l9 6z"/></svg></button>
-        <button class="ic" id="playBtn" title="Putar/jeda (spasi)" aria-label="Putar atau jeda"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5v14l12-7z"/></svg></button>
-        <button class="ic" id="nextChBtn" title="Channel berikutnya (↑)" aria-label="Channel berikutnya"><svg viewBox="0 0 24 24"><path d="M18 6v12M6 6l9 6-9 6z"/></svg></button>
-        <span class="live" id="liveTag" hidden><i></i>Live</span>
-        <span class="grow"></span>
-        <button class="ic ic-pill" id="ccBtn" type="button" title="Subtitle / Auto CC (C)" aria-label="Subtitle atau Auto CC" aria-pressed="false"><span>CC</span></button>
-        <button class="ic ic-pill" id="qualBtn" type="button" title="Kualitas / Resolusi Video" aria-label="Kualitas atau Resolusi Video"><span id="qualBadge">AUTO</span></button>
-        <button class="ic" id="muteBtn" title="Suara (M)" aria-label="Nyalakan atau matikan suara"><svg viewBox="0 0 24 24" id="muteIcon"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg></button>
-        <button class="ic" id="favBtn" title="Favorit (S)" aria-label="Tambah ke favorit" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 4.3 1-6.1-4.4-4.3 6.1-.9z"/></svg></button>
-        <button class="ic" id="pipBtn" title="Picture-in-picture" aria-label="Picture in picture"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg></button>
-        <button class="ic" id="fitBtn" title="Mode Layar Penuh HP (Fit / Fill)" aria-label="Rasio Layar" hidden><svg viewBox="0 0 24 24" id="fitIcon"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
-        <button class="ic" id="fsBtn" title="Layar penuh (F)" aria-label="Layar penuh"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        <!-- VOD Scrubber Bar (Timeline, Durasi & Geser Menit) -->
+        <div class="stage-vod-bar" id="stageVodBar" hidden>
+          <div class="vod-scrub-wrap" id="vodScrubWrap">
+            <div class="vod-scrub-track" id="vodScrubTrack">
+              <div class="vod-scrub-buffer" id="vodScrubBuffer"></div>
+              <div class="vod-scrub-progress" id="vodScrubProgress"></div>
+              <div class="vod-scrub-thumb" id="vodScrubThumb"></div>
+            </div>
+            <input type="range" class="vod-scrub-input" id="vodScrubInput" min="0" max="100" value="0" step="0.1" aria-label="Timeline Menit Film">
+          </div>
+          <div class="vod-bar-row">
+            <div class="vod-bar-left">
+              <button class="vod-skip-btn" id="vodRewindBtn" type="button" title="Mundur 10 detik (←)" aria-label="Mundur 10 detik">
+                <svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05 1-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/><text x="12.5" y="15.5" font-size="6.5" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+                <span>10s</span>
+              </button>
+              <button class="vod-skip-btn" id="vodForwardBtn" type="button" title="Maju 10 detik (→)" aria-label="Maju 10 detik">
+                <svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05 1 6.9 2.6L22 7v9h-9l3.62-3.62c-1.39-1.16-3.16-1.88-5.12-1.88-3.54 0-6.55 2.31-7.6 5.5l-2.37-.78C2.92 11.03 6.85 8 11.5 8z"/><text x="11.5" y="15.5" font-size="6.5" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+                <span>10s</span>
+              </button>
+              <span class="vod-time-badge" id="vodTimeCurrent">00:00</span>
+              <span class="vod-time-sep">/</span>
+              <span class="vod-time-badge vod-time-dur" id="vodTimeDuration">--:--</span>
+            </div>
+            <div class="vod-bar-right">
+              <button class="ic ic-pill vod-server-pill" id="vodServerBtn" type="button" hidden title="Ganti Server Streaming">
+                <span class="vod-server-dot"></span>
+                <span id="vodServerLabel">Server 1</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls-btns" id="controlsBtns">
+          <button class="ic" id="prevBtn" title="Channel sebelumnya (↓)" aria-label="Channel sebelumnya"><svg viewBox="0 0 24 24"><path d="M6 6v12M18 6 9 12l9 6z"/></svg></button>
+          <button class="ic" id="playBtn" title="Putar/jeda (spasi)" aria-label="Putar atau jeda"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5v14l12-7z"/></svg></button>
+          <button class="ic" id="nextChBtn" title="Channel berikutnya (↑)" aria-label="Channel berikutnya"><svg viewBox="0 0 24 24"><path d="M18 6v12M6 6l9 6-9 6z"/></svg></button>
+          <span class="live" id="liveTag" hidden><i></i>Live</span>
+          <span class="grow"></span>
+          <button class="ic ic-pill" id="ccBtn" type="button" title="Subtitle / Auto CC (C)" aria-label="Subtitle atau Auto CC" aria-pressed="false"><span>CC</span></button>
+          <button class="ic ic-pill" id="qualBtn" type="button" title="Kualitas / Resolusi Video" aria-label="Kualitas atau Resolusi Video"><span id="qualBadge">AUTO</span></button>
+          <button class="ic" id="muteBtn" title="Suara (M)" aria-label="Nyalakan atau matikan suara"><svg viewBox="0 0 24 24" id="muteIcon"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg></button>
+          <button class="ic" id="favBtn" title="Favorit (S)" aria-label="Tambah ke favorit" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 4.3 1-6.1-4.4-4.3 6.1-.9z"/></svg></button>
+          <button class="ic" id="pipBtn" title="Picture-in-picture" aria-label="Picture in picture"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></svg></button>
+          <button class="ic" id="fitBtn" title="Mode Layar Penuh HP (Fit / Fill)" aria-label="Rasio Layar" hidden><svg viewBox="0 0 24 24" id="fitIcon"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+          <button class="ic" id="fsBtn" title="Layar penuh (F)" aria-label="Layar penuh"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        </div>
       </div>
     </div>
 
@@ -356,6 +358,19 @@
     <div class="movie-filters">
       <div class="movie-prov-tabs" id="movieProvTabs"></div>
       <div class="movie-cat-chips" id="movieCatChips"></div>
+    </div>
+
+    <!-- Netflix / Disney+ Continue Watching / Lanjut Nonton Section -->
+    <div class="movie-resume-section" id="movieResumeSection" hidden>
+      <div class="movie-resume-header">
+        <div class="movie-resume-title-wrap">
+          <span class="movie-resume-title-icon">▶️</span>
+          <h3 class="movie-resume-title">Lanjut Nonton</h3>
+          <span class="movie-resume-count" id="movieResumeCount">0 Film</span>
+        </div>
+        <button class="movie-resume-clear-btn" id="movieResumeClearBtn" type="button" title="Bersihkan riwayat tontonan">Hapus Semua</button>
+      </div>
+      <div class="movie-resume-carousel" id="movieResumeList"></div>
     </div>
 
     <div class="movie-content">
@@ -439,10 +454,23 @@
           <div class="movie-sheet-servers" id="movieSheetServers"></div>
         </div>
 
+        <!-- Resume Progress Badge & Buttons in Detail Sheet -->
+        <div class="movie-sheet-resume-box" id="movieSheetResumeBox" hidden>
+          <div class="movie-sheet-resume-badge">
+            <span class="movie-sheet-resume-dot"></span>
+            <span id="movieSheetResumeText">Terakhir ditonton sampai menit 30:24 (25%)</span>
+          </div>
+          <div class="movie-sheet-resume-bar"><i id="movieSheetResumeFill" style="width: 25%"></i></div>
+        </div>
+
         <div class="movie-sheet-actions">
           <button class="btn primary movie-sheet-play-btn" id="movieSheetPlayBtn" type="button">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg>
-            <span>Putar Film Sekarang</span>
+            <span id="movieSheetPlayBtnText">Putar Film Sekarang</span>
+          </button>
+          <button class="btn ghost movie-sheet-restart-btn" id="movieSheetRestartBtn" type="button" hidden title="Ulang film dari awal">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            <span>Ulang dari Awal</span>
           </button>
         </div>
       </div>
@@ -694,10 +722,10 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.30"></script>
-<script src="zan-sports.js?v=1.7.30"></script>
-<script src="zan-vod.js?v=1.7.30"></script>
-<script src="zan-movie.js?v=1.7.30"></script>
-<script src="app.js?v=1.7.30"></script>
+<script src="zan-sig.js?v=1.7.31"></script>
+<script src="zan-sports.js?v=1.7.31"></script>
+<script src="zan-vod.js?v=1.7.31"></script>
+<script src="zan-movie.js?v=1.7.31"></script>
+<script src="app.js?v=1.7.31"></script>
 </body>
 </html>

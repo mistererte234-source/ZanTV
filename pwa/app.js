@@ -1639,6 +1639,7 @@ function play(ch, opts) {
         try { el.video.currentTime = Math.min(targetSec, el.video.duration - 1); } catch (e) {}
         el.video.removeEventListener('loadedmetadata', applySeek);
         el.video.removeEventListener('canplay', applySeek);
+        toast('🍿 Melanjutkan tontonan dari menit ' + formatVodTime(targetSec));
       }
     };
     el.video.addEventListener('loadedmetadata', applySeek);
@@ -3072,6 +3073,9 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
   el.video.addEventListener('timeupdate', function () {
     if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
       updateVodScrubberUi(el.video.currentTime, el.video.duration);
+      if (window.ZanMovie && typeof window.ZanMovie.onPlaybackProgress === 'function') {
+        window.ZanMovie.onPlaybackProgress(el.video.currentTime, el.video.duration);
+      }
     }
   });
   el.video.addEventListener('durationchange', function () {

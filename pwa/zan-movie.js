@@ -43,7 +43,8 @@
     currentMovie: null,
     currentDetail: null,
     selectedServer: 'p3', // Default p3 (VOE Embed stream)
-    selectedEpisode: null
+    selectedEpisode: null,
+    activePlayingMovie: null
   };
 
   var el = {};
@@ -59,6 +60,12 @@
     el.movieEmpty = document.getElementById('movieEmpty');
     el.movieLoadMoreWrap = document.getElementById('movieLoadMoreWrap');
     el.movieLoadMoreBtn = document.getElementById('movieLoadMoreBtn');
+
+    // Resume / Continue Watching Carousel
+    el.movieResumeSection = document.getElementById('movieResumeSection');
+    el.movieResumeList = document.getElementById('movieResumeList');
+    el.movieResumeCount = document.getElementById('movieResumeCount');
+    el.movieResumeClearBtn = document.getElementById('movieResumeClearBtn');
 
     // Admin Dialog Elements
     el.movieAdminBtn = document.getElementById('movieAdminBtn');
@@ -79,9 +86,171 @@
     el.movieSheetServersWrap = document.getElementById('movieSheetServersWrap');
     el.movieSheetServers = document.getElementById('movieSheetServers');
     el.movieSheetPlayBtn = document.getElementById('movieSheetPlayBtn');
+    el.movieSheetPlayBtnText = document.getElementById('movieSheetPlayBtnText');
+    el.movieSheetRestartBtn = document.getElementById('movieSheetRestartBtn');
+    el.movieSheetResumeBox = document.getElementById('movieSheetResumeBox');
+    el.movieSheetResumeText = document.getElementById('movieSheetResumeText');
+    el.movieSheetResumeFill = document.getElementById('movieSheetResumeFill');
     el.movieEpSection = document.getElementById('movieEpSection');
     el.movieEpCount = document.getElementById('movieEpCount');
     el.movieEpList = document.getElementById('movieEpList');
+  }
+
+  /* ---------------- WATCH HISTORY & RESUME ENGINE (NETFLIX STYLE) ---------------- */
+  var HISTORY_KEY = 'zantv_movie_history';
+  var MAX_HISTORY = 30;
+
+  function getWatchHistory() {
+    try {
+      var raw = localStorage.getItem(HISTORY_KEY);
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.warn('[ZanMovie] Gagal baca riwayat tontonan:', e);
+      return [];
+    }
+  }
+
+  function saveWatchHistoryItem(item) {
+    if (!item || !item.url) return;
+    try {
+      var list = getWatchHistory();
+      list = list.filter(function (x) { return x.url !== item.url; });
+      list.unshift(item);
+      if (list.length > MAX_HISTORY) list = list.slice(0, MAX_HISTORY);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+    } catch (e) {
+      console.warn('[ZanMovie] Gagal simpan riwayat film:', e);
+    }
+  }
+
+  function removeWatchHistoryItem(url) {
+    if (!url) return;
+    try {
+      var list = getWatchHistory();
+      list = list.filter(function (x) { return x.url !== url; });
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+    } catch (e) {
+      console.warn('[ZanMovie] Gagal hapus riwayat film:', e);
+    }
+  }
+
+  function clearAllWatchHistory() {
+    try {
+      localStorage.removeItem(HISTORY_KEY);
+    } catch (e) {}
+  }
+
+  function getMovieProgress(url) {
+    if (!url) return null;
+    var list = getWatchHistory();
+    return list.find(function (x) { return x.url === url; }) || null;
+  }
+
+  function formatVodDuration(sec) {
+    if (sec == null || isNaN(sec) || !isFinite(sec) || sec < 0) return '00:00';
+    sec = Math.floor(sec);
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (h > 0) return h + ':' + pad(m) + ':' + pad(s);
+    return pad(m) + ':' + pad(s);
+  }
+
+  function formatRemainingText(cur, dur) {
+    if (!dur || dur <= cur) return '';
+    var remSec = Math.max(0, dur - cur);
+    var remMin = Math.round(remSec / 60);
+    if (remMin >= 60) {
+      var h = Math.floor(remMin / 60);
+      var m = remMin % 60;
+      return 'Sisa ' + h + 'j' + (m > 0 ? ' ' + m + 'm' : '');
+    }
+    return 'Sisa ' + remMin + ' mnt';
+  }
+
+  function renderResumeCarousel() {
+    if (!el.movieResumeSection || !el.movieResumeList) return;
+    var history = getWatchHistory();
+    if (!history || !history.length) {
+      el.movieResumeSection.hidden = true;
+      el.movieResumeList.innerHTML = '';
+      return;
+    }
+
+    el.movieResumeSection.hidden = false;
+    if (el.movieResumeCount) {
+      el.movieResumeCount.textContent = history.length + ' Film';
+    }
+
+    el.movieResumeList.innerHTML = history.map(function (item) {
+      var pct = Math.max(0, Math.min(100, item.progressPct || 0));
+      var curStr = formatVodDuration(item.currentTime);
+      var durStr = formatVodDuration(item.duration);
+      var remStr = formatRemainingText(item.currentTime, item.duration);
+      var posterUrl = item.poster || 'icons/icon-192.png';
+
+      return '<div class="movie-resume-card" data-url="' + escapeHtml(item.url) + '" data-prov="' + escapeHtml(item.provider || '') + '" title="' + escapeHtml(item.title) + '">' +
+        '<div class="movie-resume-thumb-wrap">' +
+          '<img class="movie-resume-thumb" src="' + escapeHtml(posterUrl) + '" alt="' + escapeHtml(item.title) + '" loading="lazy" onerror="this.src=\'icons/icon-192.png\'">' +
+          '<div class="movie-resume-overlay">' +
+            '<div class="movie-resume-play-ic">' +
+              '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>' +
+            '</div>' +
+          '</div>' +
+          '<button type="button" class="movie-resume-remove-btn" data-remove-url="' + escapeHtml(item.url) + '" title="Hapus dari daftar">✕</button>' +
+          (item.quality ? '<span class="movie-resume-badge">' + escapeHtml(item.quality) + '</span>' : '') +
+          '<div class="movie-resume-bar-wrap">' +
+            '<div class="movie-resume-bar-fill" style="width: ' + pct + '%"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="movie-resume-meta">' +
+          '<div class="movie-resume-name">' + escapeHtml(item.title) + '</div>' +
+          '<div class="movie-resume-time-info">' +
+            '<span class="movie-resume-time">' + curStr + ' / ' + durStr + '</span>' +
+            (remStr ? '<span class="movie-resume-rem">' + escapeHtml(remStr) + '</span>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  var lastProgressSaveTime = 0;
+  function onPlaybackProgress(currentTime, duration) {
+    if (!M.activePlayingMovie || !currentTime || !duration || duration < 30 || currentTime < 5) return;
+    var now = Date.now();
+    if (now - lastProgressSaveTime < 3000) return;
+    lastProgressSaveTime = now;
+
+    var cur = Math.floor(currentTime);
+    var dur = Math.floor(duration);
+    var pct = Math.round((cur / dur) * 100);
+
+    // Jika sudah 95% ke atas (film selesai/credits), hapus dari daftar resume
+    if (pct >= 95) {
+      removeWatchHistoryItem(M.activePlayingMovie.url);
+      renderResumeCarousel();
+      return;
+    }
+
+    var histItem = {
+      url: M.activePlayingMovie.url,
+      title: M.activePlayingMovie.title,
+      poster: M.activePlayingMovie.poster,
+      rating: M.activePlayingMovie.rating || '',
+      quality: M.activePlayingMovie.quality || '',
+      provider: M.activePlayingMovie.provider || M.provider,
+      providerName: M.activePlayingMovie.providerName || '',
+      activeServer: M.activePlayingMovie.activeServer || M.selectedServer || 'p3',
+      currentTime: cur,
+      duration: dur,
+      progressPct: pct,
+      updatedAt: now
+    };
+    saveWatchHistoryItem(histItem);
+    renderResumeCarousel();
   }
 
   /* ---------------- API CLIENT ---------------- */
@@ -297,15 +466,40 @@
   }
 
   /* ---------------- BUKA DETAIL FILM (SHEET) ---------------- */
-  async function openMovieDetail(item) {
+  async function openMovieDetail(item, opts) {
     if (!item) return;
+    opts = opts || {};
     M.currentMovie = item;
     M.currentDetail = null;
-    M.selectedServer = 'p3'; // default p3 VOE
+    M.selectedServer = item.activeServer || 'p3'; // default p3 VOE
     M.selectedEpisode = null;
 
     var curProv = (M.providers && M.providers.find(function (p) { return p.id === (item.provider || M.provider); })) || {};
     var provBadge = (curProv.shortName || 'BIOSKOP').toUpperCase();
+
+    // Cek progress tontonan dari riwayat lokal (Netflix / Disney+ style)
+    var progress = getMovieProgress(item.url);
+    if (progress && progress.currentTime > 5) {
+      if (el.movieSheetResumeBox) {
+        el.movieSheetResumeBox.hidden = false;
+        if (el.movieSheetResumeText) {
+          el.movieSheetResumeText.textContent = 'Terakhir ditonton sampai menit ' + formatVodDuration(progress.currentTime) + ' (' + (progress.progressPct || 0) + '%)';
+        }
+        if (el.movieSheetResumeFill) {
+          el.movieSheetResumeFill.style.width = Math.min(100, Math.max(0, progress.progressPct || 0)) + '%';
+        }
+      }
+      if (el.movieSheetPlayBtnText) {
+        el.movieSheetPlayBtnText.textContent = 'Lanjut Nonton (' + formatVodDuration(progress.currentTime) + ')';
+      }
+      if (el.movieSheetRestartBtn) {
+        el.movieSheetRestartBtn.hidden = false;
+      }
+    } else {
+      if (el.movieSheetResumeBox) el.movieSheetResumeBox.hidden = true;
+      if (el.movieSheetPlayBtnText) el.movieSheetPlayBtnText.textContent = 'Putar Film Sekarang';
+      if (el.movieSheetRestartBtn) el.movieSheetRestartBtn.hidden = true;
+    }
 
     // Tampilkan data awal seketika
     if (el.movieSheetCover) el.movieSheetCover.src = item.poster || 'icons/icon-192.png';
@@ -322,7 +516,7 @@
     if (el.movieSheetServers) el.movieSheetServers.innerHTML = '<span class="movie-server-btn is-active">Server 3 (VOE)</span>';
     if (el.movieSheetPlayBtn) {
       el.movieSheetPlayBtn.disabled = true;
-      el.movieSheetPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg><span>Menyiapkan...</span>';
+      if (el.movieSheetPlayBtnText) el.movieSheetPlayBtnText.textContent = 'Menyiapkan...';
     }
 
     if (el.movieSheet) {
@@ -340,7 +534,7 @@
       if (el.movieSheetDesc) el.movieSheetDesc.textContent = 'Gagal memuat detail film. Silakan coba lagi.';
       if (el.movieSheetPlayBtn) {
         el.movieSheetPlayBtn.disabled = false;
-        el.movieSheetPlayBtn.innerHTML = '<span>Coba Putar Langsung</span>';
+        if (el.movieSheetPlayBtnText) el.movieSheetPlayBtnText.textContent = 'Coba Putar Langsung';
       }
       return;
     }
@@ -363,8 +557,9 @@
 
     // Render Server Tabs
     var servers = detail.servers || [{ id: 'p3', name: 'Server 3' }, { id: 'p1', name: 'Server 1' }];
-    var hasP3 = servers.some(function (s) { return s.id === 'p3'; });
-    M.selectedServer = hasP3 ? 'p3' : (servers[0] ? servers[0].id : 'p1');
+    var preferredServer = (progress && progress.activeServer) || M.selectedServer || 'p3';
+    var hasPref = servers.some(function (s) { return s.id === preferredServer; });
+    M.selectedServer = hasPref ? preferredServer : (servers[0] ? servers[0].id : 'p3');
 
     if (el.movieSheetServers) {
       el.movieSheetServers.innerHTML = servers.map(function (s) {
@@ -388,14 +583,25 @@
 
       if (el.movieSheetPlayBtn) {
         el.movieSheetPlayBtn.disabled = false;
-        el.movieSheetPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg><span>Putar ' + escapeHtml(detail.episodes[0].title || 'Episode 1') + '</span>';
+        if (el.movieSheetPlayBtnText) {
+          el.movieSheetPlayBtnText.textContent = 'Putar ' + (detail.episodes[0].title || 'Episode 1');
+        }
       }
     } else {
       if (el.movieEpSection) el.movieEpSection.hidden = true;
       if (el.movieSheetPlayBtn) {
         el.movieSheetPlayBtn.disabled = false;
-        el.movieSheetPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg><span>Putar Film Sekarang</span>';
+        if (el.movieSheetPlayBtnText) {
+          el.movieSheetPlayBtnText.textContent = (progress && progress.currentTime > 5)
+            ? ('Lanjut Nonton (' + formatVodDuration(progress.currentTime) + ')')
+            : 'Putar Film Sekarang';
+        }
       }
+    }
+
+    // Jika dipanggil dengan flag autoResume (misal klik kartu di Carousel Lanjut Nonton), langsung putar!
+    if (opts && opts.autoResume && progress && progress.currentTime > 5) {
+      playCurrentSelection({ seekTime: progress.currentTime });
     }
   }
 
@@ -409,7 +615,8 @@
   }
 
   /* ---------------- PUTAR FILM / EPISODE ---------------- */
-  async function playCurrentSelection() {
+  async function playCurrentSelection(opts) {
+    opts = opts || {};
     var targetUrl = '';
     var playTitle = '';
     var targetProv = (M.currentDetail && M.currentDetail.provider) || (M.currentMovie && M.currentMovie.provider) || M.provider;
@@ -430,9 +637,17 @@
       return;
     }
 
+    var progress = getMovieProgress(targetUrl);
+    var seekTime = 0;
+    if (typeof opts.seekTime === 'number') {
+      seekTime = opts.seekTime;
+    } else if (!opts.restart && progress && progress.currentTime > 5) {
+      seekTime = progress.currentTime;
+    }
+
     if (el.movieSheetPlayBtn) {
       el.movieSheetPlayBtn.disabled = true;
-      el.movieSheetPlayBtn.innerHTML = '<span>Menyiapkan Stream...</span>';
+      if (el.movieSheetPlayBtnText) el.movieSheetPlayBtnText.textContent = 'Menyiapkan Stream...';
     }
 
     showToast('🍿 Menghubungkan jalur stream: ' + playTitle + '...');
@@ -453,11 +668,18 @@
         url: targetUrl,
         tab: altTab
       });
+      if (streamRes && streamRes.streamUrl) {
+        M.selectedServer = altTab;
+      }
     }
 
     if (el.movieSheetPlayBtn) {
       el.movieSheetPlayBtn.disabled = false;
-      el.movieSheetPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg><span>Putar Sekarang</span>';
+      if (el.movieSheetPlayBtnText) {
+        el.movieSheetPlayBtnText.textContent = (seekTime > 0)
+          ? ('Lanjut Nonton (' + formatVodDuration(seekTime) + ')')
+          : 'Putar Sekarang';
+      }
     }
 
     if (!streamRes || !streamRes.streamUrl) {
@@ -483,6 +705,18 @@
     var streamRef = h.Referer || h.referer || '';
     var streamOrigin = h.Origin || h.origin || '';
     var streamUa = h['User-Agent'] || h.ua || '';
+
+    // Simpan referensi film yang sedang aktif diputar untuk auto-save watch history
+    M.activePlayingMovie = {
+      url: targetUrl,
+      title: playTitle,
+      poster: poster,
+      rating: (M.currentDetail && M.currentDetail.rating) || (M.currentMovie && M.currentMovie.rating) || '',
+      quality: (M.currentDetail && M.currentDetail.quality) || (M.currentMovie && M.currentMovie.quality) || '',
+      provider: targetProv,
+      providerName: (M.currentDetail && M.currentDetail.providerName) || 'Bioskop 21',
+      activeServer: M.selectedServer || 'p3'
+    };
 
     var vodCh = {
       name: playTitle,
@@ -510,11 +744,11 @@
       ]
     };
 
-    // Trigger pemutaran di stage player ZanTV
+    // Trigger pemutaran di stage player ZanTV dengan seekTime
     if (window.ZanTV && typeof window.ZanTV.playVod === 'function') {
-      window.ZanTV.playVod(vodCh);
+      window.ZanTV.playVod(vodCh, { seekTime: seekTime });
     } else if (typeof window.playChannel === 'function') {
-      window.playChannel(vodCh);
+      window.playChannel(vodCh, { seekTime: seekTime });
     }
 
     // Pada mobile, scroll ke stage agar video langsung terlihat
@@ -523,7 +757,11 @@
       if (s) s.scrollIntoView({ behavior: 'smooth' });
     }
 
-    showToast('▶️ Memutar: ' + playTitle);
+    if (seekTime > 0) {
+      showToast('🍿 Melanjutkan: ' + playTitle + ' (' + formatVodDuration(seekTime) + ')');
+    } else {
+      showToast('▶️ Memutar: ' + playTitle);
+    }
   }
 
   /* Ganti server streaming dari in-player dialog tanpa keluar dari film */
@@ -554,6 +792,14 @@
     var activeServerObj = serverList.find(function (s) { return s.id === serverId; });
     var activeServerName = activeServerObj ? activeServerObj.name : ('Server ' + serverId);
 
+    // Dapatkan posisi tontonan saat ini agar tetap lanjut dari detik yang sama
+    var curTime = 0;
+    var vid = document.getElementById('video');
+    if (vid && isFinite(vid.currentTime) && vid.currentTime > 0) {
+      curTime = vid.currentTime;
+    }
+    if (typeof seekTime === 'number') curTime = seekTime;
+
     showToast('🔄 Beralih ke ' + activeServerName + '...');
 
     var streamRes = await apiGet('stream', {
@@ -577,6 +823,10 @@
     var streamRef = h.Referer || h.referer || '';
     var streamOrigin = h.Origin || h.origin || '';
     var streamUa = h['User-Agent'] || h.ua || '';
+
+    if (M.activePlayingMovie) {
+      M.activePlayingMovie.activeServer = serverId;
+    }
 
     var vodCh = {
       name: playTitle,
@@ -605,7 +855,7 @@
     };
 
     if (window.ZanTV && typeof window.ZanTV.playVod === 'function') {
-      window.ZanTV.playVod(vodCh, { seekTime: seekTime });
+      window.ZanTV.playVod(vodCh, { seekTime: curTime });
     }
     showToast('⚡ Tersambung ke ' + activeServerName);
   }
@@ -639,6 +889,7 @@
     initElements();
     renderProviderTabs();
     renderCategoryChips();
+    renderResumeCarousel();
 
     // Ambil daftar provider dari backend jika tersedia
     try {
@@ -773,8 +1024,100 @@
 
     // Play Button di Sheet
     if (el.movieSheetPlayBtn) {
-      el.movieSheetPlayBtn.addEventListener('click', playCurrentSelection);
+      el.movieSheetPlayBtn.addEventListener('click', function () {
+        playCurrentSelection();
+      });
     }
+
+    // Tombol Ulang dari Awal di Sheet
+    if (el.movieSheetRestartBtn) {
+      el.movieSheetRestartBtn.addEventListener('click', function () {
+        playCurrentSelection({ seekTime: 0, restart: true });
+      });
+    }
+
+    // Tombol Bersihkan Riwayat Lanjut Nonton
+    if (el.movieResumeClearBtn) {
+      el.movieResumeClearBtn.addEventListener('click', function () {
+        if (confirm('Bersihkan semua riwayat Lanjut Nonton?')) {
+          clearAllWatchHistory();
+          renderResumeCarousel();
+          showToast('🗑️ Riwayat tontonan telah dibersihkan');
+        }
+      });
+    }
+
+    // Delegasi Klik Kartu & Tombol Hapus pada Carousel Lanjut Nonton
+    if (el.movieResumeList) {
+      el.movieResumeList.addEventListener('click', function (e) {
+        var removeBtn = e.target.closest('.movie-resume-remove-btn');
+        if (removeBtn) {
+          e.stopPropagation();
+          var rmUrl = removeBtn.getAttribute('data-remove-url');
+          if (rmUrl) {
+            removeWatchHistoryItem(rmUrl);
+            renderResumeCarousel();
+            showToast('🗑️ Film dihapus dari Lanjut Nonton');
+          }
+          return;
+        }
+
+        var card = e.target.closest('.movie-resume-card');
+        if (!card) return;
+        var url = card.getAttribute('data-url');
+        var prov = card.getAttribute('data-prov') || M.provider;
+        var history = getWatchHistory();
+        var item = history.find(function (h) { return h.url === url; });
+        if (item) {
+          if (prov && prov !== M.provider) {
+            M.provider = prov;
+            renderProviderTabs();
+          }
+          openMovieDetail(item, { autoResume: true });
+        }
+      });
+    }
+
+    // Auto-save history saat pemutaran dijeda (pause)
+    var vid = document.getElementById('video');
+    if (vid) {
+      vid.addEventListener('pause', function () {
+        if (M.activePlayingMovie && vid.currentTime && vid.duration && vid.duration >= 30) {
+          var cur = Math.floor(vid.currentTime);
+          var dur = Math.floor(vid.duration);
+          var pct = Math.round((cur / dur) * 100);
+          if (pct < 95 && cur > 5) {
+            saveWatchHistoryItem(Object.assign({}, M.activePlayingMovie, {
+              currentTime: cur,
+              duration: dur,
+              progressPct: pct,
+              updatedAt: Date.now()
+            }));
+            renderResumeCarousel();
+          }
+        }
+      });
+    }
+
+    // Auto-save saat tab/browser hendak ditutup
+    window.addEventListener('beforeunload', function () {
+      if (M.activePlayingMovie) {
+        var v = document.getElementById('video');
+        if (v && v.currentTime && v.duration && v.duration >= 30) {
+          var cur = Math.floor(v.currentTime);
+          var dur = Math.floor(v.duration);
+          var pct = Math.round((cur / dur) * 100);
+          if (pct < 95 && cur > 5) {
+            saveWatchHistoryItem(Object.assign({}, M.activePlayingMovie, {
+              currentTime: cur,
+              duration: dur,
+              progressPct: pct,
+              updatedAt: Date.now()
+            }));
+          }
+        }
+      }
+    });
 
     // Close Sheet
     if (el.movieSheetClose) {
@@ -955,7 +1298,13 @@
     playCurrentSelection: playCurrentSelection,
     switchServer: switchServer,
     openAdmin: openMovieAdminDialog,
+    getWatchHistory: getWatchHistory,
+    removeWatchHistoryItem: removeWatchHistoryItem,
+    clearAllWatchHistory: clearAllWatchHistory,
+    onPlaybackProgress: onPlaybackProgress,
+    renderResumeCarousel: renderResumeCarousel,
     onEnter: function () {
+      renderResumeCarousel();
       if (!M.movies || !M.movies.length) {
         loadMovies(false);
       }
