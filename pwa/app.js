@@ -1613,11 +1613,15 @@ function play(ch, opts) {
   var currentNeedsHeaders = !!(currentUa || currentRef || currentOrg);
 
   if (isVod) {
-    if (el.stageVodBar) el.stageVodBar.hidden = false;
+    if (el.stageVodBar) {
+      el.stageVodBar.hidden = false;
+      el.stageVodBar.removeAttribute('hidden');
+    }
     if (el.liveTag) el.liveTag.hidden = true;
     if (el.vodServerBtn) {
       if (ch.servers && ch.servers.length > 1) {
         el.vodServerBtn.hidden = false;
+        el.vodServerBtn.removeAttribute('hidden');
         if (el.vodServerLabel) el.vodServerLabel.textContent = ch.activeServerName || ('Server ' + (ch.activeServer || 1));
       } else {
         el.vodServerBtn.hidden = true;
@@ -2411,9 +2415,13 @@ function updateNow() {
   } else if (c.isVod) {
     el.nowNo.textContent = '🎬';
     el.nowName.textContent = c.name;
-    var provStr = (c.vodDrama && c.vodDrama.provider) ? (c.vodDrama.provider.toUpperCase() + ' • ') : '';
-    var epInfo = (c.vodEp && c.vodEp.episode) ? ('Episode ' + c.vodEp.episode + (c.totalEpisodes ? ('/' + c.totalEpisodes) : '') + ' • ') : '';
-    el.nowMeta.textContent = provStr + epInfo + ((c.vodDrama && (c.vodDrama.summary || c.vodDrama.title)) || 'Short Drama Series');
+    if (c.isMovie) {
+      el.nowMeta.textContent = (c.group || 'Bioskop 21') + ' • Film Bioskop Layar Lebar';
+    } else {
+      var provStr = (c.vodDrama && c.vodDrama.provider) ? (c.vodDrama.provider.toUpperCase() + ' • ') : '';
+      var epInfo = (c.vodEp && c.vodEp.episode) ? ('Episode ' + c.vodEp.episode + (c.totalEpisodes ? ('/' + c.totalEpisodes) : '') + ' • ') : '';
+      el.nowMeta.textContent = provStr + epInfo + ((c.vodDrama && (c.vodDrama.summary || c.vodDrama.title)) || 'Short Drama Series');
+    }
     if (nowEpg) { nowEpg.hidden = true; nowEpg.innerHTML = ''; }
     if (guideBtn) guideBtn.hidden = true;
   } else {
