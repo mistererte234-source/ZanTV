@@ -1610,7 +1610,7 @@ function play(ch, opts) {
   var currentOrg = activeSrc.origin || ch.origin || '';
   var currentClearKeys = activeSrc.clearKeys || ch.clearKeys || null;
   var isVod = !!(ch.isVod || ch.isMovie);
-  var currentNeedsHeaders = !isVod && !!(currentUa || currentRef || currentOrg);
+  var currentNeedsHeaders = !!(currentUa || currentRef || currentOrg);
 
   if (isVod) {
     if (el.stageVodBar) el.stageVodBar.hidden = false;
@@ -1651,7 +1651,7 @@ function play(ch, opts) {
   var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(currentUrl);
   // Hanya gunakan forceServerQ jika sudah diverifikasi lewat preflight probe
   var wantServerQ = (opts.forceServerQ && !opts.noTranscode) ? opts.forceServerQ : 0;
-  var useProxy = !!(wantServerQ || opts.viaProxy || (!isVod && (currentNeedsHeaders || isTsOrStalker)) || isHttpOnHttps) && kind !== 'unsupported';
+  var useProxy = !!(wantServerQ || opts.viaProxy || currentNeedsHeaders || (!isVod && isTsOrStalker) || isHttpOnHttps) && kind !== 'unsupported';
   E.viaProxy = useProxy;
   E.serverTranscode = !!wantServerQ;
   QUAL.serverQ = wantServerQ;

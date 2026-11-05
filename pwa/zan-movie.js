@@ -479,10 +479,18 @@
     var activeServerObj = serverList.find(function (s) { return s.id === M.selectedServer; });
     var activeServerName = activeServerObj ? activeServerObj.name : ('Server ' + (M.selectedServer || 1));
 
+    var h = streamRes.headers || {};
+    var streamRef = h.Referer || h.referer || '';
+    var streamOrigin = h.Origin || h.origin || '';
+    var streamUa = h['User-Agent'] || h.ua || '';
+
     var vodCh = {
       name: playTitle,
       url: streamRes.streamUrl,
       logo: poster,
+      ref: streamRef,
+      origin: streamOrigin,
+      ua: streamUa,
       group: (M.currentDetail && M.currentDetail.providerName) || 'Bioskop 21',
       isVod: true,
       isMovie: true,
@@ -494,6 +502,9 @@
         {
           url: streamRes.streamUrl,
           name: activeServerName,
+          ref: streamRef,
+          origin: streamOrigin,
+          ua: streamUa,
           isHls: true
         }
       ]
@@ -562,10 +573,18 @@
     }
 
     var poster = (M.currentDetail && M.currentDetail.poster) || (M.currentMovie && M.currentMovie.poster) || 'icons/icon-192.png';
+    var h = streamRes.headers || {};
+    var streamRef = h.Referer || h.referer || '';
+    var streamOrigin = h.Origin || h.origin || '';
+    var streamUa = h['User-Agent'] || h.ua || '';
+
     var vodCh = {
       name: playTitle,
       url: streamRes.streamUrl,
       logo: poster,
+      ref: streamRef,
+      origin: streamOrigin,
+      ua: streamUa,
       group: (M.currentDetail && M.currentDetail.providerName) || 'Bioskop 21',
       isVod: true,
       isMovie: true,
@@ -577,6 +596,9 @@
         {
           url: streamRes.streamUrl,
           name: activeServerName,
+          ref: streamRef,
+          origin: streamOrigin,
+          ua: streamUa,
           isHls: true
         }
       ]

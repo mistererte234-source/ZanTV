@@ -1855,7 +1855,7 @@ async function handle(req, res) {
     const wrapUrl = (rel) => {
       try {
         const abs = new URL(rel, target).toString();
-        return '/api/stream?u=' + encodeURIComponent(abs) + suffix;
+        return '/api/stream?u=' + encodeURIComponent(abs) + suffix + '&seg=1';
       } catch (e) { return rel; }
     };
 
@@ -1902,7 +1902,8 @@ async function handle(req, res) {
       return res.end(buf);
     }
 
-    const isLiveTs = !upRes.headers.get('content-length') && !req.headers['range'] && (isTsLike || ct.includes('mp2t'));
+    const isSeg = url.searchParams.get('seg') === '1' || /[._-](seg|chunk|fragment|\d+)\.(ts|m4s|mp4)/i.test(target.pathname);
+    const isLiveTs = !isSeg && !upRes.headers.get('content-length') && !req.headers['range'] && (isTsLike || ct.includes('mp2t'));
     if (isLiveTs) {
       res.writeHead(200, {
         'Content-Type': 'video/mp2t',
