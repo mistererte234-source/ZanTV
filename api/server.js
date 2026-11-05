@@ -93,9 +93,11 @@ applyMovieProvidersConfig();
 
 function isMovieProviderEnabled(provId) {
   if (!provId) return true;
-  const cfg = db.movieProviders || {};
-  if (cfg[provId] && cfg[provId].enabled === false) return false;
-  return true;
+  const p = movieProvider && movieProvider.PROVIDERS && movieProvider.PROVIDERS[provId];
+  if (!p) return false;
+  const cfg = (db.movieProviders && db.movieProviders[provId]) || {};
+  if (typeof cfg.enabled === 'boolean') return cfg.enabled;
+  return p.enabled !== false;
 }
 
 /* ---------------- kata sandi & sesi ---------------- */
@@ -1155,9 +1157,7 @@ async function handle(req, res) {
     db.movieProviders[provId].customUrl = customUrl;
     save();
 
-    if (customUrl) {
-      movieProvider.setProviderOverride(provId, { customUrl });
-    }
+    movieProvider.setProviderOverride(provId, { customUrl });
     for (const k of vodCache.keys()) {
       if (k.startsWith(`mov:cat:${provId}:`) || k.startsWith(`mov:search:${provId}:`)) {
         vodCache.delete(k);

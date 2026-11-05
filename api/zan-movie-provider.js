@@ -337,13 +337,16 @@ function setProviderOverride(provId, { enabled, customUrl }) {
   if (typeof enabled === 'boolean') {
     PROVIDERS[provId].enabled = enabled;
   }
-  if (customUrl && typeof customUrl === 'string') {
+  if (typeof customUrl === 'string') {
     const clean = customUrl.trim().replace(/\/+$/, '');
+    PROVIDERS[provId].customUrl = clean;
     if (clean) {
       PROVIDERS[provId].activeMirror = clean;
       if (!PROVIDERS[provId].mirrors.includes(clean)) {
         PROVIDERS[provId].mirrors.unshift(clean);
       }
+    } else {
+      PROVIDERS[provId].activeMirror = (PROVIDERS[provId].mirrors && PROVIDERS[provId].mirrors[0]) || '';
     }
   }
 }
@@ -358,6 +361,9 @@ function getProvidersList(isAdmin = false) {
       icon: p.icon,
       description: p.description,
       activeMirror: p.activeMirror,
+      baseUrl: p.activeMirror,
+      defaultUrl: (p.mirrors && p.mirrors[0]) || p.activeMirror || '',
+      customUrl: p.customUrl || '',
       enabled: p.enabled !== false,
       mirrors: p.mirrors || [],
       categoriesCount: (p.categories || []).length

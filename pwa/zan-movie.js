@@ -92,7 +92,10 @@
     var timer = setTimeout(function () { ac.abort(); }, 8500);
     try {
       var res = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
+        headers: {
+          'Accept': 'application/json',
+          'X-ZanTV': '1'
+        },
         credentials: 'same-origin',
         signal: ac.signal
       });
@@ -115,7 +118,8 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'X-ZanTV': '1'
         },
         credentials: 'same-origin',
         body: JSON.stringify(data || {}),
@@ -715,12 +719,13 @@
           var prov = M.providers && M.providers.find(function (p) { return p.id === provId; });
           if (prov) prov.enabled = isEnabled;
 
-          // Update pill di card
+          // Update pill & status di card
           var card = el.movieAdminList.querySelector('[data-card-prov="' + provId + '"]');
           if (card) {
-            var pill = card.querySelector('.movie-admin-pill');
+            card.classList.toggle('is-disabled', !isEnabled);
+            var pill = card.querySelector('.movie-admin-status-pill');
             if (pill) {
-              pill.className = 'movie-admin-pill ' + (isEnabled ? 'is-active' : 'is-disabled');
+              pill.className = 'movie-admin-status-pill' + (isEnabled ? '' : ' is-disabled');
               pill.textContent = isEnabled ? '🟢 Aktif' : '🔴 Nonaktif';
             }
           }
@@ -765,7 +770,11 @@
           setTimeout(function () { btn.textContent = 'Simpan Link'; }, 2000);
 
           var prov = M.providers && M.providers.find(function (p) { return p.id === provId; });
-          if (prov) prov.baseUrl = (res && res.baseUrl) || newUrl;
+          if (prov) {
+            prov.customUrl = newUrl;
+            prov.activeMirror = (res && res.activeMirror) || newUrl || prov.defaultUrl;
+            prov.baseUrl = prov.activeMirror;
+          }
 
           showToast('✅ Link mirror provider ' + provId + ' berhasil disimpan');
         } catch (err) {
@@ -806,16 +815,22 @@
     el.movieAdminList.innerHTML = list.map(function (p) {
       var isEnabled = p.enabled !== false;
       var activePill = isEnabled
-        ? '<span class="movie-admin-pill is-active">🟢 Aktif</span>'
-        : '<span class="movie-admin-pill is-disabled">🔴 Nonaktif</span>';
+        ? '<span class="movie-admin-status-pill">🟢 Aktif</span>'
+        : '<span class="movie-admin-status-pill is-disabled">🔴 Nonaktif</span>';
 
-      return '<div class="movie-admin-card" data-card-prov="' + escapeHtml(p.id) + '">' +
-        '<div class="movie-admin-card-head">' +
-          '<div class="movie-admin-card-info">' +
-            '<span class="movie-admin-card-icon">' + (p.icon || '🎬') + '</span>' +
-            '<div>' +
-              '<strong class="movie-admin-card-name">' + escapeHtml(p.name || p.id) + '</strong>' +
-              activePill +
+      var currentUrl = p.customUrl || p.activeMirror || p.baseUrl || '';
+      var defaultUrl = p.defaultUrl || (p.mirrors && p.mirrors[0]) || p.activeMirror || '';
+
+      return '<div class="movie-admin-item' + (isEnabled ? '' : ' is-disabled') + '" data-card-prov="' + escapeHtml(p.id) + '">' +
+        '<div class="movie-admin-head">' +
+          '<div class="movie-admin-info">' +
+            '<span class="movie-admin-icon">' + (p.icon || '🎬') + '</span>' +
+            '<div class="movie-admin-title-box">' +
+              '<div class="movie-admin-title">' +
+                '<span>' + escapeHtml(p.name || p.id) + '</span>' +
+                activePill +
+              '</div>' +
+              '<span class="movie-admin-desc">' + escapeHtml(p.description || '') + '</span>' +
             '</div>' +
           '</div>' +
           '<label class="ios-switch" title="Aktifkan / Nonaktifkan sumber ini">' +
@@ -823,9 +838,10 @@
             '<span class="ios-slider"></span>' +
           '</label>' +
         '</div>' +
-        '<div class="movie-admin-card-body">' +
+        '<div class="movie-admin-body">' +
           '<div class="movie-admin-url-box">' +
-            '<input type="url" class="movie-admin-url-input" data-prov="' + escapeHtml(p.id) + '" placeholder="Default: ' + escapeHtml(p.defaultUrl || p.baseUrl || '') + '" value="' + escapeHtml(p.customUrl || p.baseUrl || '') + '" autocomplete="off" spellcheck="false">' +
+            '<span class="movie-admin-url-label">Link Mirror:</span>' +
+            '<input type="url" class="movie-admin-url-input" data-prov="' + escapeHtml(p.id) + '" placeholder="Default: ' + escapeHtml(defaultUrl) + '" value="' + escapeHtml(currentUrl) + '" autocomplete="off" spellcheck="false">' +
             '<button type="button" class="btn ghost movie-admin-url-btn" data-prov="' + escapeHtml(p.id) + '">Simpan Link</button>' +
           '</div>' +
         '</div>' +
