@@ -975,21 +975,28 @@ async function handle(req, res) {
   /* ==========================================================================
      ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration) - Public VOD
      ========================================================================== */
+  if (p === '/api/movie/providers' && method === 'GET') {
+    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    return send(res, 200, { providers: movieProvider.getProvidersList() });
+  }
+
   if (p === '/api/movie/categories' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    return send(res, 200, { categories: movieProvider.CATEGORIES });
+    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
+    return send(res, 200, { provider: prov, categories: movieProvider.getCategories(prov) });
   }
 
   if (p === '/api/movie/list' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
     const cat = (url.searchParams.get('category') || 'terbaru').toLowerCase();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
-    const cacheKey = `mov:cat:${cat}:${page}`;
+    const cacheKey = `mov:cat:${prov}:${cat}:${page}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
     try {
-      const data = await movieProvider.getCatalog(cat, page);
+      const data = await movieProvider.getCatalog(cat, page, prov);
       setVodCache(cacheKey, data, 10 * 60 * 1000);
       return send(res, 200, data);
     } catch (err) {
@@ -999,15 +1006,16 @@ async function handle(req, res) {
 
   if (p === '/api/movie/search' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
     const q = (url.searchParams.get('q') || '').trim();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
-    if (!q) return send(res, 200, { query: '', page: 1, items: [] });
-    const cacheKey = `mov:search:${q}:${page}`;
+    if (!q) return send(res, 200, { provider: prov, query: '', page: 1, items: [] });
+    const cacheKey = `mov:search:${prov}:${q}:${page}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
     try {
-      const data = await movieProvider.search(q, page);
+      const data = await movieProvider.search(q, page, prov);
       setVodCache(cacheKey, data, 15 * 60 * 1000);
       return send(res, 200, data);
     } catch (err) {
@@ -1017,14 +1025,15 @@ async function handle(req, res) {
 
   if (p === '/api/movie/detail' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
     const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
     if (!itemUrl) return send(res, 400, { error: 'Parameter url atau id diperlukan' });
-    const cacheKey = `mov:det:${itemUrl}`;
+    const cacheKey = `mov:det:${prov}:${itemUrl}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
     try {
-      const data = await movieProvider.getDetail(itemUrl);
+      const data = await movieProvider.getDetail(itemUrl, prov);
       setVodCache(cacheKey, data, 30 * 60 * 1000);
       return send(res, 200, data);
     } catch (err) {
@@ -1034,15 +1043,16 @@ async function handle(req, res) {
 
   if (p === '/api/movie/stream' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
     const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
     const tab = (url.searchParams.get('tab') || 'p3').trim();
     if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
-    const cacheKey = `mov:stream:${itemUrl}:${tab}`;
+    const cacheKey = `mov:stream:${prov}:${itemUrl}:${tab}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
     try {
-      const data = await movieProvider.extractStream(itemUrl, tab);
+      const data = await movieProvider.extractStream(itemUrl, tab, prov);
       if (data && data.streamUrl) {
         setVodCache(cacheKey, data, 30 * 60 * 1000);
       }
