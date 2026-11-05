@@ -959,6 +959,86 @@ async function handle(req, res) {
     return send(res, 200, publicUser(name, matchedGps), { 'Set-Cookie': cookie(token, SESSION_MS / 1000) });
   }
 
+  /* ==========================================================================
+     ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration) - Public VOD
+     ========================================================================== */
+  if (p === '/api/movie/categories' && method === 'GET') {
+    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    return send(res, 200, { categories: movieProvider.CATEGORIES });
+  }
+
+  if (p === '/api/movie/list' && method === 'GET') {
+    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const cat = (url.searchParams.get('category') || 'terbaru').toLowerCase();
+    const page = Math.max(1, +(url.searchParams.get('page') || 1));
+    const cacheKey = `mov:cat:${cat}:${page}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    try {
+      const data = await movieProvider.getCatalog(cat, page);
+      setVodCache(cacheKey, data, 10 * 60 * 1000);
+      return send(res, 200, data);
+    } catch (err) {
+      return send(res, 502, { error: err.message || 'Gagal mengambil katalog film' });
+    }
+  }
+
+  if (p === '/api/movie/search' && method === 'GET') {
+    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const q = (url.searchParams.get('q') || '').trim();
+    const page = Math.max(1, +(url.searchParams.get('page') || 1));
+    if (!q) return send(res, 200, { query: '', page: 1, items: [] });
+    const cacheKey = `mov:search:${q}:${page}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    try {
+      const data = await movieProvider.search(q, page);
+      setVodCache(cacheKey, data, 15 * 60 * 1000);
+      return send(res, 200, data);
+    } catch (err) {
+      return send(res, 502, { error: err.message || 'Pencarian film gagal' });
+    }
+  }
+
+  if (p === '/api/movie/detail' && method === 'GET') {
+    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
+    if (!itemUrl) return send(res, 400, { error: 'Parameter url atau id diperlukan' });
+    const cacheKey = `mov:det:${itemUrl}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    try {
+      const data = await movieProvider.getDetail(itemUrl);
+      setVodCache(cacheKey, data, 30 * 60 * 1000);
+      return send(res, 200, data);
+    } catch (err) {
+      return send(res, 502, { error: err.message || 'Gagal mengambil detail film' });
+    }
+  }
+
+  if (p === '/api/movie/stream' && method === 'GET') {
+    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
+    const tab = (url.searchParams.get('tab') || 'p3').trim();
+    if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
+    const cacheKey = `mov:stream:${itemUrl}:${tab}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) return send(res, 200, cached);
+
+    try {
+      const data = await movieProvider.extractStream(itemUrl, tab);
+      if (data && data.streamUrl) {
+        setVodCache(cacheKey, data, 30 * 60 * 1000);
+      }
+      return send(res, 200, data);
+    } catch (err) {
+      return send(res, 502, { error: err.message || 'Gagal mengekstrak link stream film' });
+    }
+  }
+
   const me = sessionUser(req);
   if (!me) throw fail(401, 'Silakan masuk dulu');
   const admin = me.role === 'admin';
@@ -1417,85 +1497,7 @@ async function handle(req, res) {
     return send(res, 200, payload);
   }
 
-  /* ==========================================================================
-     ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration)
-     ========================================================================== */
-  if (p === '/api/movie/categories' && method === 'GET') {
-    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    return send(res, 200, { categories: movieProvider.CATEGORIES });
-  }
 
-  if (p === '/api/movie/list' && method === 'GET') {
-    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const cat = (url.searchParams.get('category') || 'terbaru').toLowerCase();
-    const page = Math.max(1, +(url.searchParams.get('page') || 1));
-    const cacheKey = `mov:cat:${cat}:${page}`;
-    const cached = getVodCache(cacheKey);
-    if (cached) return send(res, 200, cached);
-
-    try {
-      const data = await movieProvider.getCatalog(cat, page);
-      setVodCache(cacheKey, data, 10 * 60 * 1000);
-      return send(res, 200, data);
-    } catch (err) {
-      return send(res, 502, { error: err.message || 'Gagal mengambil katalog film' });
-    }
-  }
-
-  if (p === '/api/movie/search' && method === 'GET') {
-    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const q = (url.searchParams.get('q') || '').trim();
-    const page = Math.max(1, +(url.searchParams.get('page') || 1));
-    if (!q) return send(res, 200, { query: '', page: 1, items: [] });
-    const cacheKey = `mov:search:${q}:${page}`;
-    const cached = getVodCache(cacheKey);
-    if (cached) return send(res, 200, cached);
-
-    try {
-      const data = await movieProvider.search(q, page);
-      setVodCache(cacheKey, data, 15 * 60 * 1000);
-      return send(res, 200, data);
-    } catch (err) {
-      return send(res, 502, { error: err.message || 'Pencarian film gagal' });
-    }
-  }
-
-  if (p === '/api/movie/detail' && method === 'GET') {
-    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
-    if (!itemUrl) return send(res, 400, { error: 'Parameter url atau id diperlukan' });
-    const cacheKey = `mov:det:${itemUrl}`;
-    const cached = getVodCache(cacheKey);
-    if (cached) return send(res, 200, cached);
-
-    try {
-      const data = await movieProvider.getDetail(itemUrl);
-      setVodCache(cacheKey, data, 30 * 60 * 1000);
-      return send(res, 200, data);
-    } catch (err) {
-      return send(res, 502, { error: err.message || 'Gagal mengambil detail film' });
-    }
-  }
-
-  if (p === '/api/movie/stream' && method === 'GET') {
-    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
-    const tab = (url.searchParams.get('tab') || 'p3').trim();
-    if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
-    const cacheKey = `mov:stream:${itemUrl}:${tab}`;
-    const cached = getVodCache(cacheKey);
-    if (cached) return send(res, 200, cached);
-
-    try {
-      const data = await movieProvider.extractStream(itemUrl, tab);
-      if (data && data.streamUrl) {
-        setVodCache(cacheKey, data, 30 * 60 * 1000);
-      }
-      return send(res, 200, data);
-    } catch (err) {
-      return send(res, 502, { error: err.message || 'Gagal mengekstrak link stream film' });
-    }
-  }
 
   /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U, anti multi-connect MAC, penyambung TS otomatis, & kompresi resolusi FFmpeg */
   if (p === '/api/stream' && method === 'GET') {

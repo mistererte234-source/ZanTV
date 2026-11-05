@@ -69,11 +69,19 @@
   async function apiGet(endpoint, params) {
     var qs = new URLSearchParams(params || {}).toString();
     var url = '/api/movie/' + endpoint + (qs ? '?' + qs : '');
+    var ac = new AbortController();
+    var timer = setTimeout(function () { ac.abort(); }, 8000);
     try {
-      var res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      var res = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+        credentials: 'same-origin',
+        signal: ac.signal
+      });
+      clearTimeout(timer);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return await res.json();
     } catch (e) {
+      clearTimeout(timer);
       console.warn('[ZanMovie] API error:', endpoint, e);
       return null;
     }
@@ -118,19 +126,23 @@
       }
     }
 
-    var res;
-    if (M.query) {
-      res = await apiGet('search', { q: M.query, page: M.page });
-    } else {
-      res = await apiGet('list', { category: M.category, page: M.page });
+    var res = null;
+    try {
+      if (M.query) {
+        res = await apiGet('search', { q: M.query, page: M.page });
+      } else {
+        res = await apiGet('list', { category: M.category, page: M.page });
+      }
+    } catch (e) {
+      console.error('[ZanMovie] Load movies exception:', e);
+    } finally {
+      if (el.movieLoading) el.movieLoading.hidden = true;
+      if (el.movieLoadMoreBtn) {
+        el.movieLoadMoreBtn.disabled = false;
+        el.movieLoadMoreBtn.innerHTML = '<span>Muat Lebih Banyak Film</span><svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5v14M5 12l7 7 7-7"/></svg>';
+      }
+      M.loading = false;
     }
-
-    if (el.movieLoading) el.movieLoading.hidden = true;
-    if (el.movieLoadMoreBtn) {
-      el.movieLoadMoreBtn.disabled = false;
-      el.movieLoadMoreBtn.innerHTML = '<span>Muat Lebih Banyak Film</span><svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5v14M5 12l7 7 7-7"/></svg>';
-    }
-    M.loading = false;
 
     var items = (res && res.items) || [];
     if (!append) {
@@ -140,7 +152,15 @@
     }
 
     if (!M.movies.length) {
-      if (el.movieEmpty) el.movieEmpty.hidden = false;
+      if (el.movieEmpty) {
+        el.movieEmpty.hidden = false;
+        var emptyText = el.movieEmpty.querySelector('.movie-empty-text');
+        if (emptyText) {
+          emptyText.textContent = (res === null)
+            ? 'Koneksi ke server film sedang sibuk atau timeout. Silakan klik tombol kategori di atas untuk coba lagi.'
+            : 'Tidak ada film ditemukan.';
+        }
+      }
       if (el.movieLoadMoreWrap) el.movieLoadMoreWrap.hidden = true;
       return;
     }

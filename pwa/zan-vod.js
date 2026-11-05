@@ -551,36 +551,43 @@
 
   function applyMode(mode) {
     S.mode = mode;
+    var isLive = (mode === 'live');
     var isVod = (mode === 'vod');
-    document.body.classList.toggle('is-vod-mode', isVod);
+    var isMovie = (mode === 'movie');
 
-    if (el.segLiveBtn) el.segLiveBtn.classList.toggle('is-active', mode === 'live');
+    document.body.classList.toggle('is-vod-mode', isVod);
+    document.body.classList.toggle('is-movie-mode', isMovie);
+
+    if (el.segLiveBtn) el.segLiveBtn.classList.toggle('is-active', isLive);
     if (el.segVodBtn) el.segVodBtn.classList.toggle('is-active', isVod);
     var segMovieBtn = document.getElementById('segMovieBtn');
-    if (segMovieBtn) segMovieBtn.classList.toggle('is-active', mode === 'movie');
+    if (segMovieBtn) segMovieBtn.classList.toggle('is-active', isMovie);
 
     var groups = document.getElementById('groups');
     var listpane = document.querySelector('.listpane');
     var vodPane = document.getElementById('vodPane');
     var moviePane = document.getElementById('moviePane');
+    var liveSearch = document.getElementById('liveSearchLabel');
+    var playlistBtn = document.getElementById('playlistBtn');
 
-    if (groups) groups.hidden = (mode !== 'live');
-    if (listpane) listpane.hidden = (mode !== 'live');
-    if (vodPane) vodPane.hidden = (mode !== 'vod');
-    if (moviePane) moviePane.hidden = (mode !== 'movie');
+    if (groups) groups.hidden = !isLive;
+    if (listpane) listpane.hidden = !isLive;
+    if (vodPane) vodPane.hidden = !isVod;
+    if (moviePane) moviePane.hidden = !isMovie;
+    if (liveSearch) liveSearch.hidden = !isLive;
+    if (playlistBtn) playlistBtn.hidden = !isLive;
 
-    if (mode === 'live') {
+    if (isLive) {
       // User berpindah ke Live TV:
-      // Matikan pemutaran VOD (Dracin / Movie) agar player kembali bersih ke mode TV normal
       if (window.ZanTV && typeof window.ZanTV.stopVod === 'function') {
         window.ZanTV.stopVod();
       }
       if (window.innerWidth <= 860) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
-    } else if (mode === 'vod') {
+    } else if (isVod) {
       // User berpindah ke VOD Short Drama:
-      if (window.innerWidth <= 860 && window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
+      if (window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
         if (!window.ZanTV.isPlayingDrama || !window.ZanTV.isPlayingDrama()) {
           window.ZanTV.stopPlayback();
         }
@@ -588,12 +595,22 @@
       if (!S.dramas || !S.dramas.length) {
         loadDramas();
       }
-    } else if (mode === 'movie') {
+    } else if (isMovie) {
       // User berpindah ke Bioskop 21:
-      if (window.innerWidth <= 860 && window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
+      if (window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
         if (!window.ZanTV.isPlayingMovie || !window.ZanTV.isPlayingMovie()) {
           window.ZanTV.stopPlayback();
         }
+      }
+      if (!window.ZanTV || !window.ZanTV.isPlayingMovie()) {
+        var idleText = document.getElementById('idleText');
+        var nowName = document.getElementById('nowName');
+        var nowMeta = document.getElementById('nowMeta');
+        var nowNo = document.getElementById('nowNo');
+        if (idleText) idleText.textContent = 'Pilih film Bioskop 21 untuk mulai menonton';
+        if (nowName) nowName.textContent = 'Bioskop 21';
+        if (nowMeta) nowMeta.textContent = 'Koleksi film bioskop & serial TV terupdate.';
+        if (nowNo) nowNo.textContent = '21';
       }
       if (window.ZanMovie && typeof window.ZanMovie.onEnter === 'function') {
         window.ZanMovie.onEnter();

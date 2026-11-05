@@ -2212,10 +2212,15 @@ body.stage-theater-fullscreen .foot {
    Bioskop 21 / Movie VOD Explorer Styles (iOS Premium Glassmorphism)
    ========================================================================== */
 .is-movie-mode .layout {
-  grid-template-columns: minmax(400px, 1fr) minmax(440px, 1.35fr);
-  grid-template-areas: "movie stage";
+  grid-template-columns: minmax(400px, 1fr) minmax(440px, 1.35fr) !important;
+  grid-template-areas: "movie stage" !important;
 }
-.is-movie-mode #liveSearchLabel { display: none; }
+.is-movie-mode #liveSearchLabel,
+.is-movie-mode #playlistBtn,
+.is-movie-mode #groups,
+.is-movie-mode .listpane {
+  display: none !important;
+}
 .is-movie-mode .stagepane {
   display: flex;
   flex-direction: column;

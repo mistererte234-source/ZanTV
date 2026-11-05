@@ -2,11 +2,19 @@
 /**
  * ZanTV Movie Provider Module (CloudX-V2 Port for Node.js)
  * Scraper & HLS Stream Extractor untuk Film Bioskop & Series Sub Indo
+ * Dilengkapi Multi-Mirror Auto-Failover & Strict Timeout (Anti-Hanging)
  * Crafted with love by Lody for ZanTV.
  */
 
-let baseMirrorUrl = 'https://klikxxi.shop';
-let lastMirrorCheck = 0;
+const KNOWN_MIRRORS = [
+  'https://klikxxi.shop',
+  'https://filmlokal.me',
+  'https://new39.ngefilm.site',
+  'https://idmxl.ink',
+  'https://ww11.pencurimovie.sbs'
+];
+
+let activeMirror = KNOWN_MIRRORS[0];
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -16,7 +24,7 @@ const CATEGORIES = [
   { id: 'series', name: '📺 TV Series', path: 'tv/page/%d/' },
   { id: 'action', name: '💥 Action', path: 'category/action/page/%d/' },
   { id: 'horror', name: '👻 Horror', path: 'category/horror/page/%d/' },
-  { id: 'comedy', name: '😂 Comedy', path: 'category/comedy/page/%d/' },
+  { id: 'comedy', name: '😂 Komedi', path: 'category/comedy/page/%d/' },
   { id: 'romance', name: '❤️ Romance', path: 'category/roman/page/%d/' },
   { id: 'scifi', name: '🚀 Sci-Fi', path: 'category/science-fiction/page/%d/' },
   { id: 'thriller', name: '🔪 Thriller', path: 'category/thriller/page/%d/' },
@@ -24,25 +32,56 @@ const CATEGORIES = [
   { id: 'drama', name: '🎭 Drama', path: 'category/drama/page/%d/' }
 ];
 
-async function updateMirrorUrlIfNeeded() {
-  const now = Date.now();
-  if (now - lastMirrorCheck < 6 * 3600 * 1000) return baseMirrorUrl;
-  lastMirrorCheck = now;
-  try {
-    const res = await fetch('https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json', {
-      headers: { 'User-Agent': USER_AGENT }
-    });
-    if (res.ok) {
-      const json = await res.json();
-      const arr = json.klikxxi || json.filmlokal;
-      if (Array.isArray(arr) && arr[0]) {
-        baseMirrorUrl = arr[0].replace(/\/+$/, '');
-      }
+/* ---------------- MULTI-MIRROR AUTO FAILOVER FETCH ---------------- */
+async function fetchFromMirrors(pathOrUrl, options = {}, timeoutMs = 4500) {
+  // Susun urutan: coba mirror aktif dulu, lalu mirror lainnya
+  let mirrorsToTry = [];
+  if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
+    // Jika path berupa absolute URL, ekstrak path-nya
+    try {
+      const u = new URL(pathOrUrl);
+      const reqPath = u.pathname + u.search;
+      mirrorsToTry = [activeMirror, ...KNOWN_MIRRORS.filter(m => m !== activeMirror)].map(m => m + reqPath);
+      // Tambahkan URL aslinya di posisi paling depan
+      mirrorsToTry.unshift(pathOrUrl);
+    } catch (e) {
+      mirrorsToTry = [pathOrUrl, ...KNOWN_MIRRORS];
     }
-  } catch (e) {
-    // Fallback to default baseMirrorUrl
+  } else {
+    const cleanPath = pathOrUrl.replace(/^\/+/, '');
+    mirrorsToTry = [activeMirror, ...KNOWN_MIRRORS.filter(m => m !== activeMirror)].map(m => `${m}/${cleanPath}`);
   }
-  return baseMirrorUrl;
+
+  // Deduplikasi URL
+  mirrorsToTry = mirrorsToTry.filter((v, i, a) => a.indexOf(v) === i);
+
+  let lastError = null;
+  for (const targetUrl of mirrorsToTry) {
+    try {
+      const origin = new URL(targetUrl).origin;
+      const res = await fetch(targetUrl, {
+        ...options,
+        headers: {
+          'User-Agent': USER_AGENT,
+          'Referer': origin + '/',
+          ...(options.headers || {})
+        },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.length > 200) {
+          activeMirror = origin;
+          return { html: text, baseUrl: origin, currentUrl: targetUrl };
+        }
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  throw lastError || new Error('Semua mirror streaming film sedang offline atau diblokir ISP');
 }
 
 // VOE Decryption Algorithm (Ported directly from CloudStream Voe.kt)
@@ -118,22 +157,14 @@ function parseArticles(html, baseUrl) {
   return items;
 }
 
+/* ---------------- API PUBLIK PROVIDER ---------------- */
 async function getCatalog(catId, page) {
   page = Math.max(1, +page || 1);
   catId = (catId || 'terbaru').toLowerCase();
   const cat = CATEGORIES.find(c => c.id === catId) || CATEGORIES[0];
-  const baseUrl = await updateMirrorUrlIfNeeded();
   const reqPath = cat.path.replace('%d', page);
-  const targetUrl = `${baseUrl}/${reqPath}`;
 
-  const res = await fetch(targetUrl, {
-    headers: {
-      'User-Agent': USER_AGENT,
-      'Referer': baseUrl + '/'
-    }
-  });
-  if (!res.ok) throw new Error(`Provider returned status ${res.status}`);
-  const html = await res.text();
+  const { html, baseUrl } = await fetchFromMirrors(reqPath);
   return {
     category: cat.id,
     categoryName: cat.name,
@@ -145,17 +176,9 @@ async function getCatalog(catId, page) {
 async function search(query, page) {
   page = Math.max(1, +page || 1);
   if (!query) return { query: '', page, items: [] };
-  const baseUrl = await updateMirrorUrlIfNeeded();
-  const targetUrl = `${baseUrl}/page/${page}/?s=${encodeURIComponent(query)}&post_type[]=post&post_type[]=tv`;
+  const reqPath = `page/${page}/?s=${encodeURIComponent(query)}&post_type[]=post&post_type[]=tv`;
 
-  const res = await fetch(targetUrl, {
-    headers: {
-      'User-Agent': USER_AGENT,
-      'Referer': baseUrl + '/'
-    }
-  });
-  if (!res.ok) throw new Error(`Search returned status ${res.status}`);
-  const html = await res.text();
+  const { html, baseUrl } = await fetchFromMirrors(reqPath);
   return {
     query,
     page,
@@ -170,15 +193,8 @@ async function getDetail(itemUrl) {
       itemUrl = Buffer.from(itemUrl, 'base64url').toString('utf8');
     } catch (e) {}
   }
-  const baseUrl = await updateMirrorUrlIfNeeded();
-  const res = await fetch(itemUrl, {
-    headers: {
-      'User-Agent': USER_AGENT,
-      'Referer': baseUrl + '/'
-    }
-  });
-  if (!res.ok) throw new Error(`Detail returned status ${res.status}`);
-  const html = await res.text();
+
+  const { html, baseUrl } = await fetchFromMirrors(itemUrl);
 
   const titleMatch = /<h1[^>]*class="entry-title"[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
   const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'Film';
@@ -273,17 +289,9 @@ async function extractStream(movieUrl, tabId) {
       movieUrl = Buffer.from(movieUrl, 'base64url').toString('utf8');
     } catch (e) {}
   }
-  const baseUrl = await updateMirrorUrlIfNeeded();
-  tabId = tabId || 'p3'; // p3 is VOE on KlikXXi which has direct HLS
+  tabId = tabId || 'p3';
 
-  const dRes = await fetch(movieUrl, {
-    headers: {
-      'User-Agent': USER_AGENT,
-      'Referer': baseUrl + '/'
-    }
-  });
-  if (!dRes.ok) throw new Error(`Movie page status ${dRes.status}`);
-  const dHtml = await dRes.text();
+  const { html: dHtml, baseUrl } = await fetchFromMirrors(movieUrl);
 
   const postIdMatch = /id="muvipro_player_content_id"[^>]*data-id="(\d+)"/i.exec(dHtml);
   const postId = postIdMatch ? postIdMatch[1] : null;
@@ -309,7 +317,8 @@ async function extractStream(movieUrl, tabId) {
             'User-Agent': USER_AGENT,
             'Referer': movieUrl
           },
-          body: params.toString()
+          body: params.toString(),
+          signal: AbortSignal.timeout(4000)
         });
         const ajaxHtml = await ajaxRes.text();
         const ifm = /<iframe[^>]+src="([^"]+)"/i.exec(ajaxHtml);
@@ -336,7 +345,8 @@ async function extractStream(movieUrl, tabId) {
     try {
       let voeUrl = iframeSrc;
       const voeRes = await fetch(voeUrl, {
-        headers: { 'User-Agent': USER_AGENT }
+        headers: { 'User-Agent': USER_AGENT },
+        signal: AbortSignal.timeout(4000)
       });
       const voeHtml = await voeRes.text();
       const redirMatch = /window\.location\.href\s*=\s*'([^']+)'/i.exec(voeHtml);
@@ -346,7 +356,8 @@ async function extractStream(movieUrl, tabId) {
         headers: {
           'User-Agent': USER_AGENT,
           'Referer': baseUrl + '/'
-        }
+        },
+        signal: AbortSignal.timeout(4500)
       });
       const realVoeHtml = await realVoeRes.text();
       const p8Match = /<script type="application\/json">\["([^"]+)"\]<\/script>/i.exec(realVoeHtml);
@@ -385,6 +396,5 @@ module.exports = {
   getCatalog,
   search,
   getDetail,
-  extractStream,
-  updateMirrorUrlIfNeeded
+  extractStream
 };
