@@ -1520,11 +1520,12 @@ function streamProxyUrl(rawUrl, ch, serverQ) {
 }
 
 function isVerticalVideo() {
+  if (S.playing && (S.playing.isMovie || S.playing.isVertical === false || S.playing.group === 'Bioskop 21')) return false;
   if (el.video && el.video.videoHeight && el.video.videoWidth) {
     return el.video.videoHeight > el.video.videoWidth;
   }
-  if (S.playing && (S.playing.isVod || S.playing.isVertical || S.playing.group === 'Short Drama')) return true;
-  if (document.body.classList.contains('is-vod-mode') && S.playing) return true;
+  if (S.playing && (S.playing.isVertical || S.playing.group === 'Short Drama')) return true;
+  if (document.body.classList.contains('is-vod-mode') && S.playing && !S.playing.isMovie) return true;
   return false;
 }
 
@@ -1542,7 +1543,11 @@ function updateVideoAspect() {
   }
   var wmBadge = $('#wmBadge');
   if (wmBadge) {
-    wmBadge.textContent = (isVert || (S.playing && S.playing.isVod)) ? 'VOD' : 'HD';
+    if (S.playing && (S.playing.isMovie || S.playing.group === 'Bioskop 21')) {
+      wmBadge.textContent = '21';
+    } else {
+      wmBadge.textContent = (isVert || (S.playing && S.playing.isVod)) ? 'VOD' : 'HD';
+    }
   }
 }
 
@@ -1817,7 +1822,7 @@ function stopPlayback(opts) {
 }
 
 function stopVod() {
-  if (S.playing && (S.playing.isVod || S.playing.group === 'Short Drama' || document.body.classList.contains('is-vod-mode'))) {
+  if (S.playing && (S.playing.isVod || S.playing.group === 'Short Drama' || S.playing.group === 'Bioskop 21' || document.body.classList.contains('is-vod-mode') || document.body.classList.contains('is-movie-mode'))) {
     stopPlayback();
     return true;
   }
@@ -1831,7 +1836,18 @@ window.ZanTV = {
   stopPlayback: stopPlayback,
   stopVod: stopVod,
   isPlayingVod: function () {
-    return !!(S.playing && (S.playing.isVod || S.playing.group === 'Short Drama'));
+    return !!(S.playing && (S.playing.isVod || S.playing.group === 'Short Drama' || S.playing.group === 'Bioskop 21'));
+  },
+  isPlayingDrama: function () {
+    return !!(S.playing && (S.playing.group === 'Short Drama' || (S.playing.isVod && !S.playing.isMovie)));
+  },
+  isPlayingMovie: function () {
+    return !!(S.playing && (S.playing.group === 'Bioskop 21' || (S.playing.isVod && S.playing.isMovie)));
+  },
+  setMode: function (mode) {
+    if (window.ZanVod && typeof window.ZanVod.applyMode === 'function') {
+      window.ZanVod.applyMode(mode);
+    }
   }
 };
 

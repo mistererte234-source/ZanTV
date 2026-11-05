@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.25">
+<link rel="stylesheet" href="style.css?v=1.7.26">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -76,6 +76,11 @@
       <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       <span>Short Drama</span>
       <span class="seg-badge">VOD</span>
+    </button>
+    <button class="seg-btn" id="segMovieBtn" type="button" data-mode="movie">
+      <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
+      <span>Bioskop 21</span>
+      <span class="seg-badge" style="background:#f59e0b;color:#000;">FILM</span>
     </button>
   </div>
   <label class="search" id="liveSearchLabel">
@@ -294,6 +299,42 @@
       <div class="vod-grid" id="vodGrid"></div>
     </div>
   </section>
+
+  <!-- Bioskop 21 / Movie & TV Series VOD Explorer Panel -->
+  <section class="moviepane" id="moviePane" hidden aria-label="Eksplorasi Bioskop 21 & Series">
+    <div class="movie-topbar">
+      <div class="movie-search-wrap">
+        <svg class="movie-search-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+        <input id="movieSearchInput" type="search" placeholder="Cari ribuan film bioskop & TV series..." autocomplete="off">
+        <button class="movie-search-clear" id="movieSearchClear" type="button" hidden aria-label="Hapus pencarian">✕</button>
+      </div>
+    </div>
+
+    <div class="movie-filters">
+      <div class="movie-cat-chips" id="movieCatChips"></div>
+    </div>
+
+    <div class="movie-content">
+      <div class="movie-loading" id="movieLoading" hidden>
+        <div class="spinner"><i></i></div>
+        <p>Mengambil koleksi film bioskop...</p>
+      </div>
+
+      <div class="movie-empty" id="movieEmpty" hidden>
+        <div class="movie-empty-icon">🍿</div>
+        <p class="movie-empty-text">Tidak ada film ditemukan.</p>
+      </div>
+
+      <div class="movie-grid" id="movieGrid"></div>
+
+      <div class="movie-loadmore-wrap" id="movieLoadMoreWrap" hidden>
+        <button class="btn ghost movie-loadmore-btn" id="movieLoadMoreBtn" type="button">
+          <span>Muat Lebih Banyak Film</span>
+          <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
 </main>
 
 <footer class="foot">
@@ -326,6 +367,50 @@
         <div class="vod-ep-range-tabs" id="vodEpRangeTabs"></div>
       </div>
       <div class="vod-ep-list" id="vodEpList"></div>
+    </div>
+  </div>
+</dialog>
+
+<!-- Bottom Sheet / Modal Detail Film Bioskop & Series -->
+<dialog class="movie-sheet" id="movieSheet" aria-labelledby="movieSheetTitle">
+  <div class="movie-sheet-card">
+    <div class="movie-sheet-handle"></div>
+    <button class="ic movie-sheet-close" id="movieSheetClose" type="button" aria-label="Tutup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    
+    <div class="movie-sheet-hero">
+      <img class="movie-sheet-cover" id="movieSheetCover" src="icons/icon-192.png" alt="" loading="lazy">
+      <div class="movie-sheet-info">
+        <div class="movie-sheet-badges">
+          <span class="movie-sheet-badge" id="movieSheetBadge">BIOSKOP 21</span>
+          <span class="movie-sheet-rating" id="movieSheetRating">⭐ --</span>
+          <span class="movie-sheet-quality" id="movieSheetQuality">HD</span>
+        </div>
+        <h2 class="movie-sheet-title" id="movieSheetTitle">Judul Film</h2>
+        <div class="movie-sheet-meta" id="movieSheetMeta"></div>
+        <p class="movie-sheet-desc" id="movieSheetDesc">Sinopsis...</p>
+        
+        <!-- Pilihan Server Stream -->
+        <div class="movie-sheet-servers-wrap" id="movieSheetServersWrap">
+          <span class="movie-sheet-servers-label">Pilih Server Stream:</span>
+          <div class="movie-sheet-servers" id="movieSheetServers"></div>
+        </div>
+
+        <div class="movie-sheet-actions">
+          <button class="btn primary movie-sheet-play-btn" id="movieSheetPlayBtn" type="button">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg>
+            <span>Putar Film Sekarang</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bagian Episode (khusus TV Series) -->
+    <div class="movie-ep-section" id="movieEpSection" hidden>
+      <div class="movie-ep-header">
+        <h3>Daftar Episode TV Series</h3>
+        <span class="movie-ep-count" id="movieEpCount"></span>
+      </div>
+      <div class="movie-ep-list" id="movieEpList"></div>
     </div>
   </div>
 </dialog>
@@ -548,9 +633,10 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.25"></script>
-<script src="zan-sports.js?v=1.7.25"></script>
-<script src="zan-vod.js?v=1.7.25"></script>
-<script src="app.js?v=1.7.25"></script>
+<script src="zan-sig.js?v=1.7.26"></script>
+<script src="zan-sports.js?v=1.7.26"></script>
+<script src="zan-vod.js?v=1.7.26"></script>
+<script src="zan-movie.js?v=1.7.26"></script>
+<script src="app.js?v=1.7.26"></script>
 </body>
 </html>

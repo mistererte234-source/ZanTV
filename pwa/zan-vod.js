@@ -540,51 +540,68 @@
     }
   }
 
-  /* ---------------- MODE SWITCHER (LIVE TV vs SHORT DRAMA) ---------------- */
+  /* ---------------- MODE SWITCHER (LIVE TV vs SHORT DRAMA vs BIOSKOP 21) ---------------- */
   function setMode(mode) {
-    if (S.mode === mode) return;
-    S.mode = mode;
+    if (window.ZanTV && typeof window.ZanTV.setMode === 'function') {
+      window.ZanTV.setMode(mode);
+      return;
+    }
+    applyMode(mode);
+  }
 
+  function applyMode(mode) {
+    S.mode = mode;
     var isVod = (mode === 'vod');
     document.body.classList.toggle('is-vod-mode', isVod);
 
-    if (el.segLiveBtn) el.segLiveBtn.classList.toggle('is-active', !isVod);
+    if (el.segLiveBtn) el.segLiveBtn.classList.toggle('is-active', mode === 'live');
     if (el.segVodBtn) el.segVodBtn.classList.toggle('is-active', isVod);
+    var segMovieBtn = document.getElementById('segMovieBtn');
+    if (segMovieBtn) segMovieBtn.classList.toggle('is-active', mode === 'movie');
 
     var groups = document.getElementById('groups');
     var listpane = document.querySelector('.listpane');
     var vodPane = document.getElementById('vodPane');
+    var moviePane = document.getElementById('moviePane');
 
-    if (groups) groups.hidden = isVod;
-    if (listpane) listpane.hidden = isVod;
-    if (vodPane) vodPane.hidden = !isVod;
+    if (groups) groups.hidden = (mode !== 'live');
+    if (listpane) listpane.hidden = (mode !== 'live');
+    if (vodPane) vodPane.hidden = (mode !== 'vod');
+    if (moviePane) moviePane.hidden = (mode !== 'movie');
 
-    if (!isVod) {
-      // User berpindah dari VOD ke Live TV:
-      // Matikan pemutaran VOD (Dracin) agar player kembali bersih ke mode TV normal
+    if (mode === 'live') {
+      // User berpindah ke Live TV:
+      // Matikan pemutaran VOD (Dracin / Movie) agar player kembali bersih ke mode TV normal
       if (window.ZanTV && typeof window.ZanTV.stopVod === 'function') {
         window.ZanTV.stopVod();
       }
-      // Pada mobile, scroll kembali ke paling atas agar daftar channel langsung terlihat
       if (window.innerWidth <= 860) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
-    } else {
-      // User berpindah ke VOD:
-      // Pada mobile jika Live TV sedang memutar, matikan agar layar lega untuk eksplorasi drama
+    } else if (mode === 'vod') {
+      // User berpindah ke VOD Short Drama:
       if (window.innerWidth <= 860 && window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
-        if (!window.ZanTV.isPlayingVod()) {
+        if (!window.ZanTV.isPlayingDrama || !window.ZanTV.isPlayingDrama()) {
           window.ZanTV.stopPlayback();
         }
+      }
+      if (!S.dramas || !S.dramas.length) {
+        loadDramas();
+      }
+    } else if (mode === 'movie') {
+      // User berpindah ke Bioskop 21:
+      if (window.innerWidth <= 860 && window.ZanTV && typeof window.ZanTV.stopPlayback === 'function') {
+        if (!window.ZanTV.isPlayingMovie || !window.ZanTV.isPlayingMovie()) {
+          window.ZanTV.stopPlayback();
+        }
+      }
+      if (window.ZanMovie && typeof window.ZanMovie.onEnter === 'function') {
+        window.ZanMovie.onEnter();
       }
     }
 
     if (window.ZanTV && typeof window.ZanTV.updateVideoAspect === 'function') {
       window.ZanTV.updateVideoAspect();
-    }
-
-    if (isVod && (!S.dramas || !S.dramas.length)) {
-      loadDramas();
     }
   }
 
@@ -620,6 +637,8 @@
     // Mode Toggle
     if (el.segLiveBtn) el.segLiveBtn.addEventListener('click', function () { setMode('live'); });
     if (el.segVodBtn) el.segVodBtn.addEventListener('click', function () { setMode('vod'); });
+    var segMovieBtn = document.getElementById('segMovieBtn');
+    if (segMovieBtn) segMovieBtn.addEventListener('click', function () { setMode('movie'); });
 
     // Language Toggle
     if (el.vodLangToggle) {
@@ -679,6 +698,14 @@
 
   window.ZanVod = {
     setMode: setMode,
+    applyMode: applyMode,
+    onEnter: function () {
+      if (!S.dramas || !S.dramas.length) loadDramas();
+    },
+    isPlayingDrama: function () {
+      return !!(window.ZanTV && window.ZanTV.isPlayingVod && window.ZanTV.isPlayingVod() &&
+                document.body.classList.contains('is-vod-mode'));
+    },
     loadDramas: loadDramas,
     openDramaDetail: openDramaDetail,
     playEpisode: playEpisode,
