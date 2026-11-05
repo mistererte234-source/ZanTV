@@ -1613,9 +1613,15 @@ function play(ch, opts) {
   var currentNeedsHeaders = !!(currentUa || currentRef || currentOrg);
 
   if (isVod) {
-    if (el.stageVodBar) {
-      el.stageVodBar.hidden = false;
-      el.stageVodBar.removeAttribute('hidden');
+    var bar = el.stageVodBar || document.getElementById('stageVodBar');
+    var ctrls = el.controls || document.getElementById('controls');
+    if (bar) {
+      if (ctrls && bar.parentElement !== ctrls) {
+        ctrls.insertBefore(bar, ctrls.firstChild);
+      }
+      bar.hidden = false;
+      bar.removeAttribute('hidden');
+      bar.style.display = 'flex';
     }
     if (el.liveTag) el.liveTag.hidden = true;
     if (el.vodServerBtn) {
@@ -1628,7 +1634,11 @@ function play(ch, opts) {
       }
     }
   } else {
-    if (el.stageVodBar) el.stageVodBar.hidden = true;
+    var bar = el.stageVodBar || document.getElementById('stageVodBar');
+    if (bar) {
+      bar.hidden = true;
+      bar.style.display = 'none';
+    }
     if (el.vodServerBtn) el.vodServerBtn.hidden = true;
     if (el.vodServerMenu) el.vodServerMenu.hidden = true;
   }
@@ -1881,7 +1891,11 @@ function stopPlayback(opts) {
   if (isFullscreen()) {
     exitFullscreen();
   }
-  if (el.stageVodBar) el.stageVodBar.hidden = true;
+  var bar = el.stageVodBar || document.getElementById('stageVodBar');
+  if (bar) {
+    bar.hidden = true;
+    bar.style.display = 'none';
+  }
   if (el.vodServerBtn) el.vodServerBtn.hidden = true;
   if (el.vodServerMenu) el.vodServerMenu.hidden = true;
   if (el.vodScrubInput) el.vodScrubInput.value = 0;
@@ -3937,5 +3951,21 @@ api('GET', '/api/me').then(onLoggedIn).catch(function (err) {
 })();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js?v=1.7.31').then(function (reg) {
+      if (reg) {
+        reg.update().catch(function () {});
+        reg.addEventListener('updatefound', function () {
+          var newWorker = reg.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', function () {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                window.location.reload();
+              }
+            });
+          }
+        });
+      }
+    }).catch(function () {});
+  });
 }

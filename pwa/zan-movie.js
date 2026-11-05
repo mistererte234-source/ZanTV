@@ -744,6 +744,18 @@
       ]
     };
 
+    // Pastikan bar slider timeline VOD aktif dan berada di dalam controls
+    var bar = document.getElementById('stageVodBar');
+    var ctrls = document.getElementById('controls');
+    if (bar) {
+      if (ctrls && bar.parentElement !== ctrls) {
+        ctrls.insertBefore(bar, ctrls.firstChild);
+      }
+      bar.hidden = false;
+      bar.removeAttribute('hidden');
+      bar.style.display = 'flex';
+    }
+
     // Trigger pemutaran di stage player ZanTV dengan seekTime
     if (window.ZanTV && typeof window.ZanTV.playVod === 'function') {
       window.ZanTV.playVod(vodCh, { seekTime: seekTime });
