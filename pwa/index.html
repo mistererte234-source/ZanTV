@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.28">
+<link rel="stylesheet" href="style.css?v=1.7.29">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
 </style>
@@ -224,6 +224,48 @@
           <span class="player-pop-pill" id="qualStatusPill">Auto</span>
         </div>
         <div class="player-pop-list" id="qualList"></div>
+      </div>
+
+      <!-- Popup Ganti Server Streaming Film -->
+      <div class="player-pop" id="vodServerMenu" hidden role="dialog" aria-label="Pilih Server Film">
+        <div class="player-pop-head">
+          <strong>🎬 Ganti Server Film</strong>
+          <span class="player-pop-pill" id="vodServerCount">Auto</span>
+        </div>
+        <div class="player-pop-list" id="vodServerList"></div>
+      </div>
+
+      <!-- VOD Scrubber Bar (Timeline, Durasi & Geser Menit) -->
+      <div class="stage-vod-bar" id="stageVodBar" hidden>
+        <div class="vod-scrub-wrap" id="vodScrubWrap">
+          <div class="vod-scrub-track" id="vodScrubTrack">
+            <div class="vod-scrub-buffer" id="vodScrubBuffer"></div>
+            <div class="vod-scrub-progress" id="vodScrubProgress"></div>
+            <div class="vod-scrub-thumb" id="vodScrubThumb"></div>
+          </div>
+          <input type="range" class="vod-scrub-input" id="vodScrubInput" min="0" max="100" value="0" step="0.1" aria-label="Timeline Menit Film">
+        </div>
+        <div class="vod-bar-row">
+          <div class="vod-bar-left">
+            <button class="vod-skip-btn" id="vodRewindBtn" type="button" title="Mundur 10 detik (←)" aria-label="Mundur 10 detik">
+              <svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05 1-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/><text x="12.5" y="15.5" font-size="6.5" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+              <span>10s</span>
+            </button>
+            <button class="vod-skip-btn" id="vodForwardBtn" type="button" title="Maju 10 detik (→)" aria-label="Maju 10 detik">
+              <svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05 1 6.9 2.6L22 7v9h-9l3.62-3.62c-1.39-1.16-3.16-1.88-5.12-1.88-3.54 0-6.55 2.31-7.6 5.5l-2.37-.78C2.92 11.03 6.85 8 11.5 8z"/><text x="11.5" y="15.5" font-size="6.5" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+              <span>10s</span>
+            </button>
+            <span class="vod-time-badge" id="vodTimeCurrent">00:00</span>
+            <span class="vod-time-sep">/</span>
+            <span class="vod-time-badge vod-time-dur" id="vodTimeDuration">--:--</span>
+          </div>
+          <div class="vod-bar-right">
+            <button class="ic ic-pill vod-server-pill" id="vodServerBtn" type="button" hidden title="Ganti Server Streaming">
+              <span class="vod-server-dot"></span>
+              <span id="vodServerLabel">Server 1</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="controls" id="controls">
@@ -652,10 +694,10 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.28"></script>
-<script src="zan-sports.js?v=1.7.28"></script>
-<script src="zan-vod.js?v=1.7.28"></script>
-<script src="zan-movie.js?v=1.7.28"></script>
-<script src="app.js?v=1.7.28"></script>
+<script src="zan-sig.js?v=1.7.29"></script>
+<script src="zan-sports.js?v=1.7.29"></script>
+<script src="zan-vod.js?v=1.7.29"></script>
+<script src="zan-movie.js?v=1.7.29"></script>
+<script src="app.js?v=1.7.29"></script>
 </body>
 </html>

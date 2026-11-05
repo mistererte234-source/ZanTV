@@ -3049,8 +3049,171 @@ body.stage-theater-fullscreen .foot {
   }
 }
 
-
-
-
-
-
+/* ==========================================================================
+   VOD Timeline Scrubber & In-Player Server Switcher (iOS Glassmorphism)
+   ========================================================================== */
+.stage-vod-bar {
+  position: relative;
+  z-index: 12;
+  margin: 0 14px 6px;
+  padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  user-select: none;
+}
+.stage:not(:hover):not(.is-touching):not(:focus-within) .stage-vod-bar {
+  opacity: 0.85;
+}
+.vod-scrub-wrap {
+  position: relative;
+  width: 100%;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.vod-scrub-track {
+  position: relative;
+  width: 100%;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  overflow: hidden;
+  transition: height 0.15s ease;
+}
+.vod-scrub-wrap:hover .vod-scrub-track {
+  height: 7px;
+}
+.vod-scrub-buffer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  transition: width 0.25s linear;
+}
+.vod-scrub-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #22d3ee, #a855f7);
+  border-radius: 999px;
+}
+.vod-scrub-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 10px rgba(168, 85, 247, 0.6);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: transform 0.1s ease, width 0.15s ease, height 0.15s ease;
+}
+.vod-scrub-wrap:hover .vod-scrub-thumb {
+  width: 16px;
+  height: 16px;
+}
+.vod-scrub-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  z-index: 5;
+}
+.vod-bar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.vod-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.vod-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vod-skip-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.vod-skip-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+.vod-skip-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  transform: scale(1.05);
+}
+.vod-time-badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+}
+.vod-time-dur {
+  color: #94a3b8;
+}
+.vod-time-sep {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+}
+.vod-server-pill {
+  background: rgba(168, 85, 247, 0.18) !important;
+  border: 1px solid rgba(168, 85, 247, 0.45) !important;
+  color: #e9d5ff !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  padding: 3px 10px !important;
+  border-radius: 999px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+.vod-server-pill:hover {
+  background: rgba(168, 85, 247, 0.3) !important;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.4) !important;
+}
+.vod-server-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}

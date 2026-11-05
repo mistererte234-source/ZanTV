@@ -306,8 +306,29 @@ var el = {
   groups: $('#groups'), list: $('#list'), listCount: $('#listCount'),
   search: $('#search'), nowNo: $('#nowNo'), nowName: $('#nowName'), nowMeta: $('#nowMeta'),
   liveTag: $('#liveTag'), favBtn: $('#favBtn'), muteIcon: $('#muteIcon'), playIcon: $('#playIcon'),
-  playlistName: $('#playlistName'), dialog: $('#plDialog'), plList: $('#plList'), toast: $('#toast')
+  playlistName: $('#playlistName'), dialog: $('#plDialog'), plList: $('#plList'), toast: $('#toast'),
+  stageVodBar: $('#stageVodBar'), vodScrubWrap: $('#vodScrubWrap'), vodScrubTrack: $('#vodScrubTrack'),
+  vodScrubBuffer: $('#vodScrubBuffer'), vodScrubProgress: $('#vodScrubProgress'), vodScrubThumb: $('#vodScrubThumb'),
+  vodScrubInput: $('#vodScrubInput'), vodRewindBtn: $('#vodRewindBtn'), vodForwardBtn: $('#vodForwardBtn'),
+  vodTimeCurrent: $('#vodTimeCurrent'), vodTimeDuration: $('#vodTimeDuration'),
+  vodServerBtn: $('#vodServerBtn'), vodServerLabel: $('#vodServerLabel'),
+  vodServerMenu: $('#vodServerMenu'), vodServerCount: $('#vodServerCount'), vodServerList: $('#vodServerList')
 };
+
+function formatVodTime(sec) {
+  if (sec == null || isNaN(sec) || !isFinite(sec) || sec < 0) return '00:00';
+  sec = Math.floor(sec);
+  var h = Math.floor(sec / 3600);
+  var m = Math.floor((sec % 3600) / 60);
+  var s = sec % 60;
+  var mm = (m < 10 ? '0' : '') + m;
+  var ss = (s < 10 ? '0' : '') + s;
+  if (h > 0) {
+    var hh = (h < 10 ? '0' : '') + h;
+    return hh + ':' + mm + ':' + ss;
+  }
+  return mm + ':' + ss;
+}
 
 var EXAMPLE_URL = 'https://iptv-org.github.io/iptv/countries/id.m3u';
 
@@ -1015,26 +1036,27 @@ function startHls(url, token) {
     if (token !== E.token) return;
     if (!window.Hls || !Hls.isSupported()) { startNative(url); return; }
     var isEco = QUAL.mode === 'saver' || (QUAL.mode === 'target' && QUAL.targetH > 0 && QUAL.targetH <= 480);
+    var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
     var hls = new Hls({
       enableWorker: true,
       enableWebVTT: true,
       enableIMSC1: true,
       enableCEA708Captions: true,
       capLevelToPlayerSize: isEco,
-      // Turbo Buffer & Zero-Lag Live Sync Engine (OTT Navigator Enhanced)
-      lowLatencyMode: true,
-      backBufferLength: isEco ? 15 : 30,
-      maxBufferLength: isEco ? 20 : 35,
-      maxMaxBufferLength: isEco ? 35 : 70,
-      maxBufferSize: 60 * 1024 * 1024,
+      // Turbo Buffer & Zero-Lag Live Sync Engine (OTT Navigator Enhanced for Live, Deep Buffered for VOD)
+      lowLatencyMode: !isVod,
+      backBufferLength: isVod ? 90 : (isEco ? 15 : 30),
+      maxBufferLength: isVod ? 90 : (isEco ? 20 : 35),
+      maxMaxBufferLength: isVod ? 180 : (isEco ? 35 : 70),
+      maxBufferSize: (isVod ? 120 : 60) * 1024 * 1024,
       maxBufferHole: 0.8,
       highBufferWatchdogPeriod: 2,
       nudgeOffset: 0.1,
       nudgeMaxRetry: 5,
-      maxStarvationDelay: 2.5,
-      liveSyncDurationCount: 4,
-      liveMaxLatencyDurationCount: 8,
-      liveDurationInfinity: true,
+      maxStarvationDelay: isVod ? 4.0 : 2.5,
+      liveSyncDurationCount: isVod ? 0 : 4,
+      liveMaxLatencyDurationCount: isVod ? 0 : 8,
+      liveDurationInfinity: !isVod,
       manifestLoadingMaxRetry: 6,
       manifestLoadingRetryDelay: 500,
       levelLoadingMaxRetry: 6,
@@ -1590,6 +1612,40 @@ function play(ch, opts) {
   var isVod = !!(ch.isVod || ch.isMovie);
   var currentNeedsHeaders = !isVod && !!(currentUa || currentRef || currentOrg);
 
+  if (isVod) {
+    if (el.stageVodBar) el.stageVodBar.hidden = false;
+    if (el.liveTag) el.liveTag.hidden = true;
+    if (el.vodServerBtn) {
+      if (ch.servers && ch.servers.length > 1) {
+        el.vodServerBtn.hidden = false;
+        if (el.vodServerLabel) el.vodServerLabel.textContent = ch.activeServerName || ('Server ' + (ch.activeServer || 1));
+      } else {
+        el.vodServerBtn.hidden = true;
+      }
+    }
+  } else {
+    if (el.stageVodBar) el.stageVodBar.hidden = true;
+    if (el.vodServerBtn) el.vodServerBtn.hidden = true;
+    if (el.vodServerMenu) el.vodServerMenu.hidden = true;
+  }
+
+  if (opts.seekTime && opts.seekTime > 0) {
+    var targetSec = opts.seekTime;
+    var seekApplied = false;
+    var applySeek = function () {
+      if (seekApplied) return;
+      if (el.video.duration && isFinite(el.video.duration) && el.video.duration > 0) {
+        seekApplied = true;
+        try { el.video.currentTime = Math.min(targetSec, el.video.duration - 1); } catch (e) {}
+        el.video.removeEventListener('loadedmetadata', applySeek);
+        el.video.removeEventListener('canplay', applySeek);
+      }
+    };
+    el.video.addEventListener('loadedmetadata', applySeek);
+    el.video.addEventListener('canplay', applySeek);
+    setTimeout(applySeek, 1500);
+  }
+
   var kind = kindOf(currentUrl);
   var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(currentUrl);
   var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(currentUrl);
@@ -1820,6 +1876,15 @@ function stopPlayback(opts) {
   if (isFullscreen()) {
     exitFullscreen();
   }
+  if (el.stageVodBar) el.stageVodBar.hidden = true;
+  if (el.vodServerBtn) el.vodServerBtn.hidden = true;
+  if (el.vodServerMenu) el.vodServerMenu.hidden = true;
+  if (el.vodScrubInput) el.vodScrubInput.value = 0;
+  if (el.vodScrubProgress) el.vodScrubProgress.style.width = '0%';
+  if (el.vodScrubBuffer) el.vodScrubBuffer.style.width = '0%';
+  if (el.vodScrubThumb) el.vodScrubThumb.style.left = '0%';
+  if (el.vodTimeCurrent) el.vodTimeCurrent.textContent = '00:00';
+  if (el.vodTimeDuration) el.vodTimeDuration.textContent = '--:--';
 }
 
 function stopVod() {
@@ -1831,13 +1896,13 @@ function stopVod() {
 }
 
 window.ZanTV = {
-  playVod: function (vodCh) { play(vodCh); },
+  playVod: function (vodCh, opts) { play(vodCh, opts); },
   playChannel: play,
   updateVideoAspect: updateVideoAspect,
   stopPlayback: stopPlayback,
   stopVod: stopVod,
   isPlayingVod: function () {
-    return !!(S.playing && (S.playing.isVod || S.playing.group === 'Short Drama' || S.playing.group === 'Bioskop 21'));
+    return !!(S.playing && (S.playing.isVod || S.playing.isMovie || S.playing.group === 'Short Drama' || S.playing.group === 'Bioskop 21'));
   },
   isPlayingDrama: function () {
     return !!(S.playing && (S.playing.group === 'Short Drama' || (S.playing.isVod && !S.playing.isMovie)));
@@ -2607,13 +2672,14 @@ window.addEventListener('keydown', function (e) {
 /* sembunyikan kontrol saat diam */
 var idleUiTimer;
 function isPlayerPopOpen() {
-  var cm = $('#ccMenu'), qm = $('#qualMenu');
-  return !!((cm && !cm.hidden) || (qm && !qm.hidden));
+  var cm = $('#ccMenu'), qm = $('#qualMenu'), vm = $('#vodServerMenu');
+  return !!((cm && !cm.hidden) || (qm && !qm.hidden) || (vm && !vm.hidden));
 }
 function closePlayerPops() {
-  var cm = $('#ccMenu'), qm = $('#qualMenu');
+  var cm = $('#ccMenu'), qm = $('#qualMenu'), vm = $('#vodServerMenu');
   if (cm) cm.hidden = true;
   if (qm) qm.hidden = true;
+  if (vm) vm.hidden = true;
 }
 function wakeUi() {
   el.stage.classList.remove('idle-ui');
@@ -2689,6 +2755,12 @@ document.addEventListener('keydown', function (e) {
   if (k === 's' || k === 'S' || k === 'ContextMenu') { e.preventDefault(); toggleFav(); return; }
   if (k === 'm' || k === 'M') { el.video.muted = !el.video.muted; return; }
   if (k === 'MediaPlayPause') { togglePlay(); return; }
+
+  /* Geser menit VOD / film jika sedang memutar VOD */
+  if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
+    if (k === 'ArrowLeft') { e.preventDefault(); if (typeof window.vodSeekBy === 'function') window.vodSeekBy(-10); return; }
+    if (k === 'ArrowRight') { e.preventDefault(); if (typeof window.vodSeekBy === 'function') window.vodSeekBy(10); return; }
+  }
 
   var inStage = el.stage.contains(t) || isFullscreen();
   var row = t.closest && t.closest('.row');
@@ -2905,9 +2977,154 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
   }
   document.addEventListener('click', function (e) {
     if (!isPlayerPopOpen()) return;
-    if (e.target.closest && e.target.closest('#ccMenu, #qualMenu, #ccBtn, #qualBtn')) return;
+    if (e.target.closest && e.target.closest('#ccMenu, #qualMenu, #vodServerMenu, #ccBtn, #qualBtn, #vodServerBtn')) return;
     closePlayerPops();
   });
+})();
+
+/* ------------------------------------------------------------------ */
+/* VOD Scrubber Bar (Timeline, Seek & Pilihan Server Film)             */
+/* ------------------------------------------------------------------ */
+(function initVodScrubber() {
+  var isScrubbingVod = false;
+
+  function updateVodScrubberUi(cur, dur) {
+    if (!dur || !isFinite(dur) || dur <= 0) {
+      if (el.vodTimeDuration) el.vodTimeDuration.textContent = '--:--';
+      return;
+    }
+    var pct = Math.max(0, Math.min(100, (cur / dur) * 100));
+    if (!isScrubbingVod) {
+      if (el.vodScrubInput) el.vodScrubInput.value = pct;
+      if (el.vodScrubProgress) el.vodScrubProgress.style.width = pct + '%';
+      if (el.vodScrubThumb) el.vodScrubThumb.style.left = pct + '%';
+      if (el.vodTimeCurrent) el.vodTimeCurrent.textContent = formatVodTime(cur);
+    }
+    if (el.vodTimeDuration) el.vodTimeDuration.textContent = formatVodTime(dur);
+
+    if (el.vodScrubBuffer && el.video.buffered && el.video.buffered.length) {
+      try {
+        for (var i = el.video.buffered.length - 1; i >= 0; i--) {
+          var bStart = el.video.buffered.start(i);
+          var bEnd = el.video.buffered.end(i);
+          if (bStart <= cur && cur <= bEnd) {
+            var bufPct = Math.max(0, Math.min(100, (bEnd / dur) * 100));
+            el.vodScrubBuffer.style.width = bufPct + '%';
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  window.vodSeekBy = function (deltaSec) {
+    if (!el.video || !isFinite(el.video.duration) || el.video.duration <= 0) return;
+    var newTime = Math.max(0, Math.min(el.video.duration - 1, el.video.currentTime + deltaSec));
+    try { el.video.currentTime = newTime; } catch (e) {}
+    updateVodScrubberUi(newTime, el.video.duration);
+    wakeUi();
+  };
+
+  if (el.vodScrubInput) {
+    el.vodScrubInput.addEventListener('input', function () {
+      isScrubbingVod = true;
+      var dur = el.video.duration;
+      if (dur && isFinite(dur) && dur > 0) {
+        var pct = parseFloat(el.vodScrubInput.value) || 0;
+        var cur = (pct / 100) * dur;
+        if (el.vodScrubProgress) el.vodScrubProgress.style.width = pct + '%';
+        if (el.vodScrubThumb) el.vodScrubThumb.style.left = pct + '%';
+        if (el.vodTimeCurrent) el.vodTimeCurrent.textContent = formatVodTime(cur);
+      }
+    });
+
+    function commitVodSeek() {
+      if (!isScrubbingVod) return;
+      isScrubbingVod = false;
+      var dur = el.video.duration;
+      if (dur && isFinite(dur) && dur > 0) {
+        var pct = parseFloat(el.vodScrubInput.value) || 0;
+        var newTime = (pct / 100) * dur;
+        try { el.video.currentTime = newTime; } catch (e) {}
+        updateVodScrubberUi(newTime, dur);
+        wakeUi();
+      }
+    }
+
+    el.vodScrubInput.addEventListener('change', commitVodSeek);
+    el.vodScrubInput.addEventListener('mouseup', commitVodSeek);
+    el.vodScrubInput.addEventListener('touchend', commitVodSeek);
+  }
+
+  if (el.vodRewindBtn) {
+    el.vodRewindBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      window.vodSeekBy(-10);
+    });
+  }
+  if (el.vodForwardBtn) {
+    el.vodForwardBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      window.vodSeekBy(10);
+    });
+  }
+
+  el.video.addEventListener('timeupdate', function () {
+    if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
+      updateVodScrubberUi(el.video.currentTime, el.video.duration);
+    }
+  });
+  el.video.addEventListener('durationchange', function () {
+    if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
+      updateVodScrubberUi(el.video.currentTime, el.video.duration);
+    }
+  });
+  el.video.addEventListener('progress', function () {
+    if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
+      updateVodScrubberUi(el.video.currentTime, el.video.duration);
+    }
+  });
+
+  function renderVodServerMenu() {
+    if (!el.vodServerList || !S.playing || !S.playing.servers) return;
+    var servers = S.playing.servers || [];
+    var activeServerId = S.playing.activeServer || 'p3';
+    if (el.vodServerCount) el.vodServerCount.textContent = servers.length + ' Server';
+    el.vodServerList.innerHTML = servers.map(function (s) {
+      var isActive = (s.id === activeServerId);
+      var activeClass = isActive ? ' is-active' : '';
+      return '<button type="button" class="player-pop-opt' + activeClass + '" data-vod-server="' + esc(s.id) + '">' +
+        (isActive ? '✓ ' : '') + esc(s.name) +
+        (s.id === 'p3' ? ' (⚡ Cepat/VOE)' : '') +
+        '</button>';
+    }).join('');
+  }
+
+  if (el.vodServerBtn && el.vodServerMenu) {
+    el.vodServerBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nextOpen = el.vodServerMenu.hidden;
+      closePlayerPops();
+      el.vodServerMenu.hidden = !nextOpen;
+      if (nextOpen) {
+        renderVodServerMenu();
+        wakeUi();
+      }
+    });
+  }
+
+  if (el.vodServerList) {
+    el.vodServerList.addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-vod-server]');
+      if (!btn) return;
+      var serverId = btn.getAttribute('data-vod-server');
+      if (el.vodServerMenu) el.vodServerMenu.hidden = true;
+      if (window.ZanMovie && typeof window.ZanMovie.switchServer === 'function') {
+        var curTime = el.video.currentTime || 0;
+        window.ZanMovie.switchServer(serverId, curTime);
+      }
+    });
+  }
 })();
 
 $('#retryBtn').addEventListener('click', function () { if (S.playing) play(S.playing); });
@@ -2921,7 +3138,7 @@ $('#copyBtn').addEventListener('click', function () {
   } else prompt('Salin alamat ini:', url);
 });
 el.stage.addEventListener('dblclick', function (e) {
-  if (e.target.closest('.controls, .msg, .player-pop')) return;
+  if (e.target.closest('.controls, .msg, .player-pop, .stage-vod-bar')) return;
   if (isFullscreen() && isVerticalVideo()) {
     toggleFitMode();
   } else {
@@ -2934,7 +3151,7 @@ el.idle.addEventListener('click', function () { if (S.cued) play(S.cued); });
 (function () {
   var y0 = null, x0 = null, t0 = 0;
   el.stage.addEventListener('touchstart', function (e) {
-    if (e.touches.length !== 1 || e.target.closest('.controls, .msg, .player-pop')) { y0 = null; return; }
+    if (e.touches.length !== 1 || e.target.closest('.controls, .msg, .player-pop, .stage-vod-bar')) { y0 = null; return; }
     y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; t0 = Date.now();
   }, { passive: true });
   el.stage.addEventListener('touchend', function (e) {

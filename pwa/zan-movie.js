@@ -1,4 +1,4 @@
-/* ZanTV Bioskop & Movie VOD Explorer v1.7.28
+/* ZanTV Bioskop & Movie VOD Explorer v1.7.29
  * Integrasi Multi-Provider Film Bioskop Indonesia (CloudX-V2 Scraper & Extractor)
  * Providers: Bioskop 21 (KlikXXi/Ngefilm), PusatMovie21, SarangFilm21, SaveFilm21, WGFilm21
  * Fitur: Multi-Provider Tabs, Auto-Failover Mirrors, Full 16:9 Landscape Player, Direct M3U8 & Stage Embed
@@ -475,6 +475,10 @@
 
     // Bangun channel payload untuk pemutar ZanTV (Direct HLS Clean)
     var poster = (M.currentDetail && M.currentDetail.poster) || (M.currentMovie && M.currentMovie.poster) || 'icons/icon-192.png';
+    var serverList = (M.currentDetail && M.currentDetail.servers) || [];
+    var activeServerObj = serverList.find(function (s) { return s.id === M.selectedServer; });
+    var activeServerName = activeServerObj ? activeServerObj.name : ('Server ' + (M.selectedServer || 1));
+
     var vodCh = {
       name: playTitle,
       url: streamRes.streamUrl,
@@ -483,10 +487,13 @@
       isVod: true,
       isMovie: true,
       isVertical: false, // 16:9 Landscape widescreen standard cinema
+      servers: serverList,
+      activeServer: M.selectedServer,
+      activeServerName: activeServerName,
       sources: [
         {
           url: streamRes.streamUrl,
-          name: 'Server ' + (streamRes.extractor || M.selectedServer).toUpperCase(),
+          name: activeServerName,
           isHls: true
         }
       ]
@@ -506,6 +513,79 @@
     }
 
     showToast('▶️ Memutar: ' + playTitle);
+  }
+
+  /* Ganti server streaming dari in-player dialog tanpa keluar dari film */
+  async function switchServer(serverId, seekTime) {
+    if (!serverId) return;
+    M.selectedServer = serverId;
+    var targetUrl = '';
+    var playTitle = '';
+    var targetProv = (M.currentDetail && M.currentDetail.provider) || (M.currentMovie && M.currentMovie.provider) || M.provider;
+
+    if (M.currentDetail && M.currentDetail.isSeries && M.selectedEpisode) {
+      targetUrl = M.selectedEpisode.url;
+      playTitle = (M.currentDetail.title || 'Series') + ' - ' + (M.selectedEpisode.title || 'Episode');
+    } else if (M.currentDetail && M.currentDetail.url) {
+      targetUrl = M.currentDetail.url;
+      playTitle = M.currentDetail.title;
+    } else if (M.currentMovie && M.currentMovie.url) {
+      targetUrl = M.currentMovie.url;
+      playTitle = M.currentMovie.title;
+    }
+
+    if (!targetUrl) {
+      showToast('⚠️ Data film tidak ditemukan untuk ganti server.');
+      return;
+    }
+
+    var serverList = (M.currentDetail && M.currentDetail.servers) || [];
+    var activeServerObj = serverList.find(function (s) { return s.id === serverId; });
+    var activeServerName = activeServerObj ? activeServerObj.name : ('Server ' + serverId);
+
+    showToast('🔄 Beralih ke ' + activeServerName + '...');
+
+    var streamRes = await apiGet('stream', {
+      provider: targetProv,
+      url: targetUrl,
+      tab: serverId
+    });
+
+    if (!streamRes || !streamRes.streamUrl) {
+      showToast('❌ ' + activeServerName + ' sedang sibuk. Silakan pilih server lain.');
+      return;
+    }
+
+    if (streamRes.kind === 'iframe') {
+      showToast('⚠️ Server ini memerlukan iframe pihak ketiga.');
+      return;
+    }
+
+    var poster = (M.currentDetail && M.currentDetail.poster) || (M.currentMovie && M.currentMovie.poster) || 'icons/icon-192.png';
+    var vodCh = {
+      name: playTitle,
+      url: streamRes.streamUrl,
+      logo: poster,
+      group: (M.currentDetail && M.currentDetail.providerName) || 'Bioskop 21',
+      isVod: true,
+      isMovie: true,
+      isVertical: false,
+      servers: serverList,
+      activeServer: serverId,
+      activeServerName: activeServerName,
+      sources: [
+        {
+          url: streamRes.streamUrl,
+          name: activeServerName,
+          isHls: true
+        }
+      ]
+    };
+
+    if (window.ZanTV && typeof window.ZanTV.playVod === 'function') {
+      window.ZanTV.playVod(vodCh, { seekTime: seekTime });
+    }
+    showToast('⚡ Tersambung ke ' + activeServerName);
   }
 
   /* ---------------- SEARCH DEBOUNCE ---------------- */
@@ -851,6 +931,7 @@
     loadMovies: loadMovies,
     openMovieDetail: openMovieDetail,
     playCurrentSelection: playCurrentSelection,
+    switchServer: switchServer,
     openAdmin: openMovieAdminDialog,
     onEnter: function () {
       if (!M.movies || !M.movies.length) {
