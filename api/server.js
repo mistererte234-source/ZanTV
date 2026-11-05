@@ -1854,8 +1854,19 @@ async function handle(req, res) {
       (org ? '&org=' + encodeURIComponent(org) : '');
     const wrapUrl = (rel) => {
       try {
-        const abs = new URL(rel, target).toString();
-        return '/api/stream?u=' + encodeURIComponent(abs) + suffix + '&seg=1';
+        const absUrl = new URL(rel, target);
+        // Jika target memiliki query params (token, hash, auth), wariskan ke sub-manifest/segmen agar CDN tidak menolak (403)!
+        if (target.search && !absUrl.search) {
+          absUrl.search = target.search;
+        } else if (target.search && absUrl.search) {
+          const tParams = new URLSearchParams(target.search);
+          const aParams = new URLSearchParams(absUrl.search);
+          for (const [k, v] of tParams.entries()) {
+            if (!aParams.has(k)) aParams.set(k, v);
+          }
+          absUrl.search = aParams.toString();
+        }
+        return '/api/stream?u=' + encodeURIComponent(absUrl.toString()) + suffix + '&seg=1';
       } catch (e) { return rel; }
     };
 

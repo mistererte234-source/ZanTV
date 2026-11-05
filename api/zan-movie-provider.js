@@ -449,10 +449,12 @@ async function getDetail(itemUrl, provId) {
     while ((tm = liRegex.exec(tabRegex[1])) !== null) {
       const tabHref = tm[1];
       const tabName = tm[2].replace(/<[^>]+>/g, '').trim();
-      let tabId = tabHref.replace('#', '') || ('p' + (servers.length + 1));
+      let tabId = 'player' + (servers.length + 1);
       if (tabHref.includes('?player=')) {
         const pm = /[?&]player=(\d+)/.exec(tabHref);
         if (pm) tabId = 'player' + pm[1];
+      } else if (tabHref.startsWith('#')) {
+        tabId = tabHref.replace('#', '') || ('player' + (servers.length + 1));
       }
       servers.push({
         id: tabId,
@@ -535,19 +537,26 @@ async function extractStream(movieUrl, tabId, provId) {
 
   let iframeSrc = null;
 
-  // 1. Jika tab berupa query param (e.g. player2, player3)
+  // 1. Jika tab berupa query param (e.g. player1, player2, player3)
   if (tabId.startsWith('player')) {
     const playerNum = tabId.replace('player', '');
-    try {
-      const qUrl = `${movieUrl.split('?')[0]}?player=${playerNum}`;
-      const qRes = await fetch(qUrl, {
-        headers: { 'User-Agent': USER_AGENT, 'Referer': movieUrl },
-        signal: AbortSignal.timeout(4000)
-      });
-      const qHtml = await qRes.text();
-      const ifm = /<div[^>]*class="[^"]*gmr-embed-responsive[^"]*"[^>]*>[\s\S]*?<iframe[^>]+src="([^"]+)"/i.exec(qHtml);
-      if (ifm && ifm[1]) iframeSrc = ifm[1];
-    } catch (e) {}
+    if (playerNum === '1') {
+      const directIfm = /<div[^>]*class="[^"]*gmr-embed-responsive[^"]*"[^>]*>[\s\S]*?<iframe[^>]+src="([^"]+)"/i.exec(dHtml) ||
+                        /<iframe[^>]+src="([^"]+)"/i.exec(dHtml);
+      if (directIfm && directIfm[1]) iframeSrc = directIfm[1];
+    }
+    if (!iframeSrc) {
+      try {
+        const qUrl = `${movieUrl.split('?')[0]}?player=${playerNum}`;
+        const qRes = await fetch(qUrl, {
+          headers: { 'User-Agent': USER_AGENT, 'Referer': movieUrl },
+          signal: AbortSignal.timeout(4000)
+        });
+        const qHtml = await qRes.text();
+        const ifm = /<div[^>]*class="[^"]*gmr-embed-responsive[^"]*"[^>]*>[\s\S]*?<iframe[^>]+src="([^"]+)"/i.exec(qHtml);
+        if (ifm && ifm[1]) iframeSrc = ifm[1];
+      } catch (e) {}
+    }
   }
 
   // 2. Jika ada postId Muvipro, coba via AJAX admin-ajax.php dengan origin yang tepat

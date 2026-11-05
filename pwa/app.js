@@ -1039,6 +1039,9 @@ function startHls(url, token) {
     var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
     var hls = new Hls({
       enableWorker: true,
+      xhrSetup: function (xhr, u) {
+        xhr.withCredentials = true;
+      },
       enableWebVTT: true,
       enableIMSC1: true,
       enableCEA708Captions: true,
