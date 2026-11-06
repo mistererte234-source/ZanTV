@@ -1614,7 +1614,7 @@ function play(ch, opts) {
   var currentOrg = activeSrc.origin || ch.origin || '';
   var currentClearKeys = activeSrc.clearKeys || ch.clearKeys || null;
   var isVod = !!(ch.isVod || ch.isMovie);
-  var currentNeedsHeaders = !!(currentUa || currentRef || currentOrg);
+  var currentNeedsHeaders = !isVod && !!(currentUa || currentRef || currentOrg);
 
   if (isVod) {
     var bar = el.stageVodBar || document.getElementById('stageVodBar');
@@ -1670,7 +1670,7 @@ function play(ch, opts) {
   var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(currentUrl);
   // Hanya gunakan forceServerQ jika sudah diverifikasi lewat preflight probe
   var wantServerQ = (opts.forceServerQ && !opts.noTranscode) ? opts.forceServerQ : 0;
-  var useProxy = !!(wantServerQ || opts.viaProxy || currentNeedsHeaders || (!isVod && isTsOrStalker) || isHttpOnHttps) && kind !== 'unsupported';
+  var useProxy = !!(wantServerQ || opts.viaProxy || (!isVod && (currentNeedsHeaders || isTsOrStalker)) || isHttpOnHttps) && kind !== 'unsupported';
   E.viaProxy = useProxy;
   E.serverTranscode = !!wantServerQ;
   QUAL.serverQ = wantServerQ;
@@ -1702,8 +1702,12 @@ function play(ch, opts) {
 
   start.then(function () {
     if (token !== E.token) return;
-    bindVideoTextTracks();
-    syncCcEngine();
+    try {
+      bindVideoTextTracks();
+      syncCcEngine();
+    } catch (e) {
+      console.warn('[Player] text tracks error:', e);
+    }
     var p = el.video.play();
     if (p && p.catch) {
       p.catch(function (e) {
@@ -1715,6 +1719,7 @@ function play(ch, opts) {
       });
     }
   }).catch(function (err) {
+    console.error('[Player] start pipeline error:', err);
     if (token === E.token) fail(err && err.kind ? err : { kind: 'network' }, token);
   });
 }
@@ -1737,8 +1742,9 @@ function fail(info, token) {
   }
   if (!E.viaProxy && S.playing && info.kind !== 'drm' && info.kind !== 'unsupported' && info.kind !== 'lib') {
     var curUrl = (S.playing.sources && S.playing.sources[S.playing._sourceIndex || 0]) ? S.playing.sources[S.playing._sourceIndex || 0].url : S.playing.url;
-    // Jangan relay stream DASH (.mpd) lewat /api/stream karena proxy server tidak merender segmen anak XML
-    if (kindOf(curUrl) !== 'dash') {
+    var isVodCh = !!(S.playing.isVod || S.playing.isMovie);
+    // Jangan relay stream DASH (.mpd) atau film VOD lewat /api/stream (film langsung tembak CDN dengan CORS *)
+    if (kindOf(curUrl) !== 'dash' && !isVodCh) {
       el.nowMeta.textContent = 'Mencoba memutar lewat jalur relay server…';
       play(S.playing, { retry: true, viaProxy: true, sourceIndex: S.playing._sourceIndex });
       return;

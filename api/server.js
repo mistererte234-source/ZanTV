@@ -1216,8 +1216,8 @@ async function handle(req, res) {
   }
 
   const me = sessionUser(req);
-  if (!me) throw fail(401, 'Silakan masuk dulu');
-  const admin = me.role === 'admin';
+  if (!me && p !== '/api/stream') throw fail(401, 'Silakan masuk dulu');
+  const admin = me && me.role === 'admin';
   const needAdmin = () => { if (!admin) throw fail(403, 'Hanya admin yang boleh melakukan ini'); };
 
   if (p === '/api/logout' && method === 'POST') {
@@ -1695,7 +1695,7 @@ async function handle(req, res) {
     // Cegah multi-connect pada server Stalker/MAC: putus koneksi lama pada MAC/sesi yang sama sebelum buka yang baru
     const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);
     const lockKey = (isTsLike || (q && forceTranscode))
-      ? (macMatch ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase() : 'ts:' + me.key)
+      ? (macMatch ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase() : 'ts:' + (me ? me.key : ip))
       : '';
     if (lockKey && activeStreamLocks.has(lockKey)) {
       try { activeStreamLocks.get(lockKey).kill(); } catch (e) {}
