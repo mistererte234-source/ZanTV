@@ -1783,7 +1783,9 @@ function fail(info, token) {
   var x = explain(info, S.playing);
   var detailSuffix = (info && info.detail) ? ' [HLS: ' + info.detail + (info.code ? ' ' + info.code : '') + ']' : '';
   el.msgTitle.textContent = x.title;
-  el.msgBody.textContent = x.body + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + detailSuffix) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '');
+  var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
+  el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.41 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
@@ -4001,9 +4003,34 @@ api('GET', '/api/me').then(onLoggedIn).catch(function (err) {
   document.addEventListener('keydown', function onKey() { hide(); document.removeEventListener('keydown', onKey, true); }, true);
 })();
 
+var freshBtnEl = document.getElementById('freshBtn');
+if (freshBtnEl) {
+  freshBtnEl.addEventListener('click', function () {
+    toast('🧹 Membersihkan cache aplikasi...');
+    if ('caches' in window) {
+      caches.keys().then(function (keys) {
+        return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+      }).then(function () {
+        if (navigator.serviceWorker) {
+          navigator.serviceWorker.getRegistrations().then(function (regs) {
+            regs.forEach(function (r) { r.unregister(); });
+            window.location.reload(true);
+          });
+        } else {
+          window.location.reload(true);
+        }
+      }).catch(function () {
+        window.location.reload(true);
+      });
+    } else {
+      window.location.reload(true);
+    }
+  });
+}
+
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js?v=1.7.31').then(function (reg) {
+    navigator.serviceWorker.register('sw.js?v=1.7.41').then(function (reg) {
       if (reg) {
         reg.update().catch(function () {});
         reg.addEventListener('updatefound', function () {
