@@ -1669,6 +1669,7 @@ async function handle(req, res) {
     const rawU = url.searchParams.get('u') || '';
     const ua = (url.searchParams.get('ua') || '').slice(0, 300);
     const ref = (url.searchParams.get('ref') || '').slice(0, 300);
+    const org = (url.searchParams.get('org') || '').slice(0, 300);
     console.log('[Stream Relay] INCOMING:', method, 'seg=' + (url.searchParams.get('seg') || '0'), 'target:', clip(rawU, 90));
 
     const clientOrigin = req.headers.origin;
