@@ -83,23 +83,6 @@ function save() {
 }
 load();
 
-function applyMovieProvidersConfig() {
-  if (!movieProvider || !db.movieProviders) return;
-  for (const [id, cfg] of Object.entries(db.movieProviders)) {
-    movieProvider.setProviderOverride(id, cfg);
-  }
-}
-applyMovieProvidersConfig();
-
-function isMovieProviderEnabled(provId) {
-  if (!provId) return true;
-  const p = movieProvider && movieProvider.PROVIDERS && movieProvider.PROVIDERS[provId];
-  if (!p) return false;
-  const cfg = (db.movieProviders && db.movieProviders[provId]) || {};
-  if (typeof cfg.enabled === 'boolean') return cfg.enabled;
-  return p.enabled !== false;
-}
-
 /* ---------------- kata sandi & sesi ---------------- */
 function hashPassword(pw, salt) {
   salt = salt || crypto.randomBytes(16).toString('hex');
