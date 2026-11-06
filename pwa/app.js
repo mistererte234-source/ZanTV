@@ -1039,9 +1039,6 @@ function startHls(url, token) {
     var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
     var hls = new Hls({
       enableWorker: true,
-      xhrSetup: function (xhr, u) {
-        xhr.withCredentials = true;
-      },
       enableWebVTT: true,
       enableIMSC1: true,
       enableCEA708Captions: true,
@@ -1583,6 +1580,7 @@ function play(ch, opts) {
   opts = opts || {};
   if (!ch) return;
   var token = ++E.token;
+  console.log('[Player] play() invoked:', ch.name, 'isVod:', !!(ch.isVod || ch.isMovie), 'retry:', !!opts.retry, 'token:', token);
   if (!opts.retry) { E.retries = 0; E.hasPlayed = false; }
   E.tsFallback = false;
   E.nativeFallback = false;
@@ -1727,6 +1725,7 @@ function lockReason(info) {
 }
 
 function fail(info, token) {
+  console.error('[Player] fail() invoked:', info, 'token:', token, 'E.token:', E.token, 'playing:', S.playing ? S.playing.name : 'none');
   if (token !== E.token) return;
   if (E.serverTranscode && S.playing) {
     S.playing._noServerTranscode = true;

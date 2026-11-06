@@ -267,8 +267,19 @@ async function assertPublicUrl(u) {
   try { url = new URL(u); } catch (e) { throw new Error('Alamat tidak valid'); }
   if (!/^https?:$/.test(url.protocol)) throw new Error('Alamat harus diawali http:// atau https://');
   const host = url.hostname.replace(/^\[|\]$/g, '');
-  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
-  if (!addrs.length || addrs.some((a) => privateIp(a.address))) throw new Error('Alamat menuju jaringan internal tidak diizinkan');
+  if (net.isIP(host)) {
+    if (privateIp(host)) throw new Error('Alamat menuju jaringan internal tidak diizinkan');
+    return url;
+  }
+  try {
+    const addrs = await dns.lookup(host, { all: true });
+    if (addrs && addrs.length && addrs.some((a) => privateIp(a.address))) {
+      throw new Error('Alamat menuju jaringan internal tidak diizinkan');
+    }
+  } catch (err) {
+    if (err.message && err.message.includes('jaringan internal')) throw err;
+    // Jika DNS lokal gagal/timeout, biarkan fetch upstream mencoba resolusi langsung
+  }
   return url;
 }
 function isDirectStreamUrl(u) {
@@ -1658,7 +1669,8 @@ async function handle(req, res) {
     const rawU = url.searchParams.get('u') || '';
     const ua = (url.searchParams.get('ua') || '').slice(0, 300);
     const ref = (url.searchParams.get('ref') || '').slice(0, 300);
-    const org = (url.searchParams.get('org') || '').slice(0, 300);
+    console.log('[Stream Relay] INCOMING:', method, 'seg=' + (url.searchParams.get('seg') || '0'), 'target:', clip(rawU, 90));
+
     const clientOrigin = req.headers.origin;
     const streamCors = {
       'Access-Control-Allow-Origin': clientOrigin || '*',
@@ -1670,9 +1682,15 @@ async function handle(req, res) {
     const reqQ = +(url.searchParams.get('q') || 0);
     const q = (reqQ === 360 || reqQ === 480 || reqQ === 720) ? reqQ : 0;
     const forceTranscode = url.searchParams.get('transcode') === '1';
-    const initialTarget = await assertPublicUrl(rawU).catch((e) => { throw fail(400, e.message); });
+
+    let initialTarget;
+    try {
+      initialTarget = await assertPublicUrl(rawU);
+    } catch (e) {
+      console.error('[Stream Relay] assertPublicUrl REJECTED:', e.message, 'rawU:', clip(rawU, 90));
+      throw fail(400, e.message);
+    }
     const isTsLike = isDirectStreamUrl(rawU);
-    console.log('[Stream Relay] INCOMING:', method, 'seg=' + (url.searchParams.get('seg') || '0'), 'target:', clip(rawU, 90));
 
     // Cegah multi-connect pada server Stalker/MAC: putus koneksi lama pada MAC/sesi yang sama sebelum buka yang baru
     const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);

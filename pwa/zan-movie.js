@@ -782,6 +782,7 @@
     }
 
     // Trigger pemutaran di stage player ZanTV dengan seekTime
+    console.log('[ZanMovie] Triggering ZanTV.playVod:', vodCh.name, 'URL:', vodCh.url);
     if (window.ZanTV && typeof window.ZanTV.playVod === 'function') {
       window.ZanTV.playVod(vodCh, { seekTime: seekTime });
     } else if (typeof window.playChannel === 'function') {
