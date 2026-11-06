@@ -258,7 +258,9 @@
     var qs = new URLSearchParams(params || {}).toString();
     var url = '/api/movie/' + endpoint + (qs ? '?' + qs : '');
     var ac = new AbortController();
-    var timer = setTimeout(function () { ac.abort(); }, 8500);
+    var timeoutMs = (endpoint === 'stream' || endpoint === 'detail') ? 35000 : 15000;
+    var timer = setTimeout(function () { ac.abort(); }, timeoutMs);
+    console.log('[ZanMovie] API GET:', endpoint, params);
     try {
       var res = await fetch(url, {
         headers: {
@@ -270,7 +272,9 @@
       });
       clearTimeout(timer);
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      return await res.json();
+      var data = await res.json();
+      console.log('[ZanMovie] API Response:', endpoint, data);
+      return data;
     } catch (e) {
       clearTimeout(timer);
       console.warn('[ZanMovie] API error:', endpoint, e);
@@ -281,7 +285,7 @@
   async function apiPost(endpoint, data) {
     var url = '/api/movie/' + endpoint;
     var ac = new AbortController();
-    var timer = setTimeout(function () { ac.abort(); }, 8500);
+    var timer = setTimeout(function () { ac.abort(); }, 25000);
     try {
       var res = await fetch(url, {
         method: 'POST',

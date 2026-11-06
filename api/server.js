@@ -1107,15 +1107,21 @@ async function handle(req, res) {
     if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
     const cacheKey = `mov:stream:${prov}:${itemUrl}:${tab}`;
     const cached = getVodCache(cacheKey);
-    if (cached) return send(res, 200, cached);
+    if (cached) {
+      console.log('[Movie API] CACHE HIT: prov=' + prov + ' tab=' + tab + ' url=' + clip(itemUrl, 70));
+      return send(res, 200, cached);
+    }
 
+    console.log('[Movie API] Extracting fresh stream: prov=' + prov + ' tab=' + tab + ' url=' + clip(itemUrl, 70));
     try {
       const data = await movieProvider.extractStream(itemUrl, tab, prov);
       if (data && data.streamUrl) {
+        console.log('[Movie API] Extracted OK: kind=' + data.kind + ' url=' + clip(data.streamUrl, 80));
         setVodCache(cacheKey, data, 30 * 60 * 1000);
       }
       return send(res, 200, data);
     } catch (err) {
+      console.error('[Movie API] Extract error: ' + err.message);
       return send(res, 502, { error: err.message || 'Gagal mengekstrak link stream film' });
     }
   }
