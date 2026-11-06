@@ -1013,45 +1013,23 @@ async function handle(req, res) {
   }
 
   /* ==========================================================================
-     ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration) - Public & Admin
+     ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration) - Public VOD
      ========================================================================== */
-  if (p === '/api/movie/providers' && method === 'GET') {
-    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const me = sessionUser(req);
-    const isAdmin = me && me.role === 'admin';
-    return send(res, 200, {
-      isAdmin: !!isAdmin,
-      providers: movieProvider.getProvidersList(isAdmin)
-    });
-  }
-
   if (p === '/api/movie/categories' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
-    const me = sessionUser(req);
-    const isAdmin = me && me.role === 'admin';
-    if (!isAdmin && !isMovieProviderEnabled(prov)) {
-      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
-    }
-    return send(res, 200, { provider: prov, categories: movieProvider.getCategories(prov) });
+    return send(res, 200, { categories: movieProvider.CATEGORIES });
   }
 
   if (p === '/api/movie/list' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
-    const me = sessionUser(req);
-    const isAdmin = me && me.role === 'admin';
-    if (!isAdmin && !isMovieProviderEnabled(prov)) {
-      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
-    }
     const cat = (url.searchParams.get('category') || 'terbaru').toLowerCase();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
-    const cacheKey = `mov:cat:${prov}:${cat}:${page}`;
+    const cacheKey = `mov:cat:${cat}:${page}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
     try {
-      const data = await movieProvider.getCatalog(cat, page, prov);
+      const data = await movieProvider.getCatalog(cat, page);
       setVodCache(cacheKey, data, 10 * 60 * 1000);
       return send(res, 200, data);
     } catch (err) {
@@ -1061,21 +1039,15 @@ async function handle(req, res) {
 
   if (p === '/api/movie/search' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
-    const me = sessionUser(req);
-    const isAdmin = me && me.role === 'admin';
-    if (!isAdmin && !isMovieProviderEnabled(prov)) {
-      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
-    }
     const q = (url.searchParams.get('q') || '').trim();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
-    if (!q) return send(res, 200, { provider: prov, query: '', page: 1, items: [] });
-    const cacheKey = `mov:search:${prov}:${q}:${page}`;
+    if (!q) return send(res, 200, { query: '', page: 1, items: [] });
+    const cacheKey = `mov:search:${q}:${page}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
     try {
-      const data = await movieProvider.search(q, page, prov);
+      const data = await movieProvider.search(q, page);
       setVodCache(cacheKey, data, 15 * 60 * 1000);
       return send(res, 200, data);
     } catch (err) {
@@ -1085,20 +1057,14 @@ async function handle(req, res) {
 
   if (p === '/api/movie/detail' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
-    const me = sessionUser(req);
-    const isAdmin = me && me.role === 'admin';
-    if (!isAdmin && !isMovieProviderEnabled(prov)) {
-      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
-    }
     const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
     if (!itemUrl) return send(res, 400, { error: 'Parameter url atau id diperlukan' });
-    const cacheKey = `mov:det:${prov}:${itemUrl}`;
+    const cacheKey = `mov:det:${itemUrl}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
     try {
-      const data = await movieProvider.getDetail(itemUrl, prov);
+      const data = await movieProvider.getDetail(itemUrl);
       setVodCache(cacheKey, data, 30 * 60 * 1000);
       return send(res, 200, data);
     } catch (err) {
@@ -1108,111 +1074,28 @@ async function handle(req, res) {
 
   if (p === '/api/movie/stream' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const prov = (url.searchParams.get('provider') || 'klikxxi').toLowerCase();
-    const me = sessionUser(req);
-    const isAdmin = me && me.role === 'admin';
-    if (!isAdmin && !isMovieProviderEnabled(prov)) {
-      return send(res, 403, { error: 'Link provider ini dinonaktifkan oleh admin' });
-    }
     const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
     const tab = (url.searchParams.get('tab') || 'p3').trim();
     if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
-    const cacheKey = `mov:stream:${prov}:${itemUrl}:${tab}`;
+    const cacheKey = `mov:stream:${itemUrl}:${tab}`;
     const cached = getVodCache(cacheKey);
     if (cached) {
-      console.log('[Movie API] CACHE HIT: prov=' + prov + ' tab=' + tab + ' url=' + clip(itemUrl, 70));
+      console.log('[Movie API] CACHE HIT: tab=' + tab + ' url=' + clip(itemUrl, 70));
       return send(res, 200, cached);
     }
 
-    // Single-Flight: gabungkan request paralel ke Promise yang sama agar scraping tidak dobel/gagal saat retry
-    let pScrape = activeMovieExtractions.get(cacheKey);
-    if (!pScrape) {
-      console.log('[Movie API] Single-flight START: prov=' + prov + ' tab=' + tab + ' url=' + clip(itemUrl, 70));
-      pScrape = movieProvider.extractStream(itemUrl, tab, prov).then((data) => {
-        if (data && data.streamUrl) {
-          console.log('[Movie API] Single-flight SUCCESS: kind=' + data.kind + ' url=' + clip(data.streamUrl, 80));
-          // TTL 2 Jam konservatif sesuai saran arsitektur expert
-          setVodCache(cacheKey, data, 2 * 3600 * 1000);
-        }
-        return data;
-      }).finally(() => {
-        activeMovieExtractions.delete(cacheKey);
-      });
-      activeMovieExtractions.set(cacheKey, pScrape);
-    } else {
-      console.log('[Movie API] Single-flight JOIN: prov=' + prov + ' tab=' + tab + ' (menunggu scraping background)');
-    }
-
     try {
-      const data = await pScrape;
+      console.log('[Movie API] Extracting: tab=' + tab + ' url=' + clip(itemUrl, 70));
+      const data = await movieProvider.extractStream(itemUrl, tab);
+      if (data && data.streamUrl) {
+        console.log('[Movie API] Extracted SUCCESS: kind=' + data.kind + ' url=' + clip(data.streamUrl, 80));
+        setVodCache(cacheKey, data, 2 * 3600 * 1000);
+      }
       return send(res, 200, data);
     } catch (err) {
       console.error('[Movie API] Extract error: ' + err.message);
       return send(res, 502, { error: err.message || 'Gagal mengekstrak link stream film' });
     }
-  }
-
-  // Admin Toggle Provider ON / OFF
-  if (p === '/api/movie/admin/provider-toggle' && method === 'POST') {
-    const me = sessionUser(req);
-    if (!me || me.role !== 'admin') throw fail(403, 'Hanya admin yang boleh melakukan ini');
-    const b = await readBody(req, 4096);
-    const provId = String(b.provider || '').toLowerCase();
-    if (!movieProvider.PROVIDERS[provId]) {
-      throw fail(400, 'Provider tidak valid');
-    }
-    const enabled = Boolean(b.enabled);
-    db.movieProviders = db.movieProviders || {};
-    db.movieProviders[provId] = db.movieProviders[provId] || {};
-    db.movieProviders[provId].enabled = enabled;
-    save();
-
-    movieProvider.setProviderOverride(provId, { enabled });
-    for (const k of vodCache.keys()) {
-      if (k.startsWith(`mov:cat:${provId}:`) || k.startsWith(`mov:search:${provId}:`)) {
-        vodCache.delete(k);
-      }
-    }
-    logEvent(req, me.name, 'movie_provider_toggle', { provider: provId, enabled });
-    return send(res, 200, {
-      ok: true,
-      provider: provId,
-      enabled,
-      providers: movieProvider.getProvidersList(true)
-    });
-  }
-
-  // Admin Update Custom Mirror / Link Provider
-  if (p === '/api/movie/admin/provider-url' && method === 'POST') {
-    const me = sessionUser(req);
-    if (!me || me.role !== 'admin') throw fail(403, 'Hanya admin yang boleh melakukan ini');
-    const b = await readBody(req, 4096);
-    const provId = String(b.provider || '').toLowerCase();
-    if (!movieProvider.PROVIDERS[provId]) {
-      throw fail(400, 'Provider tidak valid');
-    }
-    const customUrl = String(b.customUrl || '').trim();
-    if (customUrl && !/^https?:\/\//i.test(customUrl)) {
-      throw fail(400, 'Alamat URL harus diawali http:// atau https://');
-    }
-    db.movieProviders = db.movieProviders || {};
-    db.movieProviders[provId] = db.movieProviders[provId] || {};
-    db.movieProviders[provId].customUrl = customUrl;
-    save();
-
-    movieProvider.setProviderOverride(provId, { customUrl });
-    for (const k of vodCache.keys()) {
-      if (k.startsWith(`mov:cat:${provId}:`) || k.startsWith(`mov:search:${provId}:`)) {
-        vodCache.delete(k);
-      }
-    }
-    logEvent(req, me.name, 'movie_provider_url', { provider: provId, customUrl });
-    return send(res, 200, {
-      ok: true,
-      provider: provId,
-      activeMirror: movieProvider.PROVIDERS[provId].activeMirror,
-      providers: movieProvider.getProvidersList(true)
-    });
   }
 
   const me = sessionUser(req);
