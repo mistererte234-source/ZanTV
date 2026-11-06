@@ -868,6 +868,7 @@ const publicUser = (name, myGps) => {
 };
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const activeStreamLocks = new Map();
+const activeMovieExtractions = new Map();
 
 async function handle(req, res) {
   load(); // ikut membaca perubahan dari perintah CLI tanpa restart
@@ -1112,13 +1113,27 @@ async function handle(req, res) {
       return send(res, 200, cached);
     }
 
-    console.log('[Movie API] Extracting fresh stream: prov=' + prov + ' tab=' + tab + ' url=' + clip(itemUrl, 70));
+    // Single-Flight: gabungkan request paralel ke Promise yang sama agar scraping tidak dobel/gagal saat retry
+    let pScrape = activeMovieExtractions.get(cacheKey);
+    if (!pScrape) {
+      console.log('[Movie API] Single-flight START: prov=' + prov + ' tab=' + tab + ' url=' + clip(itemUrl, 70));
+      pScrape = movieProvider.extractStream(itemUrl, tab, prov).then((data) => {
+        if (data && data.streamUrl) {
+          console.log('[Movie API] Single-flight SUCCESS: kind=' + data.kind + ' url=' + clip(data.streamUrl, 80));
+          // TTL 2 Jam konservatif sesuai saran arsitektur expert
+          setVodCache(cacheKey, data, 2 * 3600 * 1000);
+        }
+        return data;
+      }).finally(() => {
+        activeMovieExtractions.delete(cacheKey);
+      });
+      activeMovieExtractions.set(cacheKey, pScrape);
+    } else {
+      console.log('[Movie API] Single-flight JOIN: prov=' + prov + ' tab=' + tab + ' (menunggu scraping background)');
+    }
+
     try {
-      const data = await movieProvider.extractStream(itemUrl, tab, prov);
-      if (data && data.streamUrl) {
-        console.log('[Movie API] Extracted OK: kind=' + data.kind + ' url=' + clip(data.streamUrl, 80));
-        setVodCache(cacheKey, data, 30 * 60 * 1000);
-      }
+      const data = await pScrape;
       return send(res, 200, data);
     } catch (err) {
       console.error('[Movie API] Extract error: ' + err.message);

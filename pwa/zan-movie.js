@@ -573,6 +573,16 @@
       }).join('');
     }
 
+    // Prefetch Stream di background selagi user membaca sinopsis (Netflix / Disney+ Style)
+    var prefetchTargetUrl = (detail.isSeries && detail.episodes && detail.episodes[0]) ? detail.episodes[0].url : item.url;
+    M.prefetchedKey = targetProv + ':' + prefetchTargetUrl + ':' + M.selectedServer;
+    console.log('[ZanMovie] Prefetching stream in background for:', M.prefetchedKey);
+    M.prefetchedPromise = apiGet('stream', {
+      provider: targetProv,
+      url: prefetchTargetUrl,
+      tab: M.selectedServer
+    });
+
     // Series Episode list
     if (detail.isSeries && detail.episodes && detail.episodes.length) {
       if (el.movieEpSection) el.movieEpSection.hidden = false;
@@ -657,12 +667,19 @@
 
     showToast('🍿 Menghubungkan jalur stream: ' + playTitle + '...');
 
-    // Ambil stream dari backend ZanTV
-    var streamRes = await apiGet('stream', {
-      provider: targetProv,
-      url: targetUrl,
-      tab: M.selectedServer
-    });
+    // Ambil stream dari backend ZanTV (Gunakan prefetched jika URL dan server cocok)
+    var reqKey = targetProv + ':' + targetUrl + ':' + M.selectedServer;
+    var streamRes = null;
+    if (M.prefetchedPromise && M.prefetchedKey === reqKey) {
+      console.log('[ZanMovie] Using prefetched stream promise for:', reqKey);
+      streamRes = await M.prefetchedPromise;
+    } else {
+      streamRes = await apiGet('stream', {
+        provider: targetProv,
+        url: targetUrl,
+        tab: M.selectedServer
+      });
+    }
 
     // Fallback jika tab pilihan pertama gagal, coba tab cadangan lain
     if (!streamRes || !streamRes.streamUrl) {
@@ -691,7 +708,7 @@
     }
 
     if (!streamRes || !streamRes.streamUrl) {
-      showToast('❌ Server film sedang sibuk. Silakan pilih server lain.');
+      showToast('❌ Server film sedang sibuk. Silakan pilih tab server lain di atas.');
       return;
     }
 

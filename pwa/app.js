@@ -1782,6 +1782,17 @@ function fail(info, token) {
   el.msgBody.textContent = x.body + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + detailSuffix) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '');
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
+  var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
+  var nextBtnEl = $('#nextBtn');
+  if (nextBtnEl) {
+    if (isVodOrMovie) {
+      nextBtnEl.textContent = 'Ganti Server Film';
+      nextBtnEl.hidden = false;
+    } else {
+      nextBtnEl.textContent = 'Channel berikutnya';
+      nextBtnEl.hidden = false;
+    }
+  }
   el.nowMeta.textContent = x.title + (detailSuffix ? ' (' + info.detail + ')' : '');
   if (S.playing) track('play_error', { channel: S.playing.name, reason: x.title });
   if (lock && S.playing) blockChannel(S.playing, lock);
@@ -3162,8 +3173,35 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
   }
 })();
 
-$('#retryBtn').addEventListener('click', function () { if (S.playing) play(S.playing); });
-$('#nextBtn').addEventListener('click', function () { zap(1); });
+$('#retryBtn').addEventListener('click', function () {
+  if (!S.playing) return;
+  if (S.playing.isMovie && window.ZanMovie && typeof window.ZanMovie.playCurrentSelection === 'function') {
+    window.ZanMovie.playCurrentSelection({ seekTime: 0, restart: true });
+    return;
+  }
+  play(S.playing);
+});
+$('#nextBtn').addEventListener('click', function () {
+  if (S.playing && (S.playing.isMovie || S.playing.isVod)) {
+    if (window.ZanMovie && typeof window.ZanMovie.switchServer === 'function') {
+      var sList = S.playing.servers || [];
+      if (sList.length > 1) {
+        var curIdx = sList.findIndex(function (s) { return s.id === S.playing.activeServer; });
+        var nextS = sList[(curIdx + 1) % sList.length];
+        if (nextS) {
+          window.ZanMovie.switchServer(nextS.id);
+          return;
+        }
+      }
+    }
+    if (el.vodServerMenu) {
+      el.vodServerMenu.hidden = false;
+      return;
+    }
+    return;
+  }
+  zap(1);
+});
 $('#copyBtn').addEventListener('click', function () {
   if (!S.playing) return;
   var url = S.playing.url;
