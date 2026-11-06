@@ -12,7 +12,8 @@ echo "⚙️ [ZanTV] Deploying API Backend to /opt/zantv-api/..."
 mkdir -p /opt/zantv-api
 cp -r api/* /opt/zantv-api/ 2>/dev/null || true
 
-echo "🔄 [ZanTV] Restarting Backend API Service..."
+echo "🔄 [ZanTV] Restarting Backend API Service & Reloading Nginx..."
 systemctl restart zantv-api 2>/dev/null || true
+systemctl reload nginx 2>/dev/null || true
 
-echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.34 sudah aktif."
+echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.35 sudah aktif."

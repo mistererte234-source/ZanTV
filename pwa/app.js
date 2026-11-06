@@ -1116,7 +1116,9 @@ function startHls(url, token) {
     });
     var recovered = 0;
     hls.on(Hls.Events.ERROR, function (_, d) {
-      console.warn('[hls]', d.type, d.details, 'fatal=' + d.fatal, 'code=' + (d.response ? d.response.code : 'none'), d.frag ? d.frag.url : (d.context ? d.context.url : d.url));
+      var logArgs = ['[hls]', d.type, d.details, 'fatal=' + d.fatal, 'code=' + (d.response ? d.response.code : 'none'), d.frag ? d.frag.url : (d.context ? d.context.url : d.url)];
+      console.warn.apply(console, logArgs);
+      if (d.fatal) console.error.apply(console, logArgs);
       if (!d.fatal || token !== E.token) return;
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recovered < 4) {
         recovered++;
@@ -1775,11 +1777,12 @@ function fail(info, token) {
   setBusy(false);
   el.liveTag.hidden = true;
   var x = explain(info, S.playing);
+  var detailSuffix = (info && info.detail) ? ' [HLS: ' + info.detail + (info.code ? ' ' + info.code : '') + ']' : '';
   el.msgTitle.textContent = x.title;
-  el.msgBody.textContent = x.body + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '');
+  el.msgBody.textContent = x.body + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + detailSuffix) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '');
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
-  el.nowMeta.textContent = x.title;
+  el.nowMeta.textContent = x.title + (detailSuffix ? ' (' + info.detail + ')' : '');
   if (S.playing) track('play_error', { channel: S.playing.name, reason: x.title });
   if (lock && S.playing) blockChannel(S.playing, lock);
 }

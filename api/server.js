@@ -1651,6 +1651,7 @@ async function handle(req, res) {
     const forceTranscode = url.searchParams.get('transcode') === '1';
     const initialTarget = await assertPublicUrl(rawU).catch((e) => { throw fail(400, e.message); });
     const isTsLike = isDirectStreamUrl(rawU);
+    console.log('[Stream Relay] INCOMING:', method, 'seg=' + (url.searchParams.get('seg') || '0'), 'target:', clip(rawU, 90));
 
     // Cegah multi-connect pada server Stalker/MAC: putus koneksi lama pada MAC/sesi yang sama sebelum buka yang baru
     const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);
@@ -1850,11 +1851,14 @@ async function handle(req, res) {
         target = attempt.target;
       }
     } catch (e) {
-      throw fail(502, 'Gagal menghubungi server stream');
+      console.error('[Stream Relay] Connect error:', e.message, 'target:', clip(rawU, 80));
+      throw fail(502, 'Gagal menghubungi server stream: ' + e.message);
     }
     if (!upRes) throw fail(502, 'Terlalu banyak pengalihan stream');
+    console.log(`[Stream Relay] Upstream status: ${upRes.status} (${upRes.headers.get('content-type') || 'unknown'}) for ${target.hostname}`);
     if (!upRes.ok && upRes.status !== 206) {
-      res.writeHead(upRes.status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      console.warn(`[Stream Relay] Upstream rejected HTTP ${upRes.status} for ${clip(rawU, 90)}`);
+      res.writeHead(upRes.status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...streamCors });
       return res.end(JSON.stringify({ error: 'Stream menjawab kode ' + upRes.status }));
     }
 
