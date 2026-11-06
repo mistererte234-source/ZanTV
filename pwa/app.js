@@ -1116,6 +1116,7 @@ function startHls(url, token) {
     });
     var recovered = 0;
     hls.on(Hls.Events.ERROR, function (_, d) {
+      console.warn('[hls]', d.type, d.details, 'fatal=' + d.fatal, 'code=' + (d.response ? d.response.code : 'none'), d.frag ? d.frag.url : (d.context ? d.context.url : d.url));
       if (!d.fatal || token !== E.token) return;
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recovered < 4) {
         recovered++;
@@ -1146,7 +1147,7 @@ function startHls(url, token) {
         return;
       }
       var code = d.response ? d.response.code : undefined;
-      fail({ kind: d.type === Hls.ErrorTypes.NETWORK_ERROR ? 'network' : 'media', code: code, detail: d.details }, token);
+      fail({ kind: d.type === Hls.ErrorTypes.NETWORK_ERROR ? 'network' : 'media', code: code, detail: d.details, fragUrl: (d.frag ? d.frag.url : (d.context ? d.context.url : d.url)) }, token);
     });
     hls.loadSource(url);
     hls.attachMedia(el.video);
@@ -1765,7 +1766,8 @@ function fail(info, token) {
   if (!hopeless && E.retries < 3) {
     E.retries++;
     var ch = S.playing;
-    el.nowMeta.textContent = 'Sinyal terputus, menyambungkan ulang Server ' + ((ch._sourceIndex || 0) + 1) + ' (' + E.retries + ' dari 3)…';
+    var detailTag = (info && info.detail) ? ' [' + info.detail + (info.code ? ' ' + info.code : '') + ']' : '';
+    el.nowMeta.textContent = 'Sinyal terputus, menyambungkan ulang Server ' + ((ch._sourceIndex || 0) + 1) + ' (' + E.retries + ' dari 3)' + detailTag + '…';
     setTimeout(function () { if (token === E.token) play(ch, { retry: true, viaProxy: E.viaProxy, sourceIndex: ch._sourceIndex }); }, 1500 * E.retries);
     return;
   }
@@ -1784,17 +1786,18 @@ function fail(info, token) {
 
 function explain(info, ch) {
   var mixed = !E.viaProxy && location.protocol === 'https:' && /^http:\/\//i.test(ch.url);
+  var detailSuffix = (info && info.detail) ? ' [HLS: ' + info.detail + (info.code ? ' ' + info.code : '') + ']' : '';
   if (info.kind === 'drm') return { title: 'Channel ini terenkripsi (DRM)', body: 'Stream ini dilindungi enkripsi DRM tanpa kunci (ClearKey) yang valid di playlist.' };
   if (info.kind === 'lib') return { title: 'Komponen pemutar gagal dimuat', body: 'Periksa koneksi internet lalu coba lagi.' };
   if (info.kind === 'unsupported') return { title: 'Format ini tidak didukung browser', body: 'Alamat seperti rtmp:// atau udp:// tidak bisa diputar di browser. Coba buka di VLC.' };
   if (info.code === 511) return { title: 'Token sesi stream dikunci server (511)', body: 'Server Stalker/IPTV menolak sambungan ulang karena play_token bersifat sekali-pakai atau batas 1 koneksi aktif per MAC sedang terpakai. Klik Coba lagi.' };
-  if (info.code === 401 || info.code === 403 || info.code === 451) return { title: 'Channel dibatasi pemilik siaran', body: 'Server stream menolak akses (kode ' + info.code + '). Jika ini stream Stalker/MAC, pastikan VLC sudah ditutup (maksimal 1 koneksi aktif) atau token tidak dikunci ke IP rumah.' };
-  if (info.code === 404 || info.code === 410) return { title: 'Alamat stream sudah tidak aktif', body: 'Server menjawab dengan kode ' + info.code + '. Channel ini kemungkinan sudah mati atau pindah alamat. Coba perbarui playlist.' };
-  if (info.code === 502) return { title: 'Server stream menolak koneksi VPS', body: 'Server ZanTV gagal mengambil stream (kode 502). Provider stream kemungkinan mengunci token ke IP internet rumahmu (memblokir IP VPS) atau tautannya sudah kedaluwarsa.' };
+  if (info.code === 401 || info.code === 403 || info.code === 451) return { title: 'Channel dibatasi pemilik siaran', body: 'Server stream menolak akses (kode ' + info.code + '). Jika ini stream Stalker/MAC, pastikan VLC sudah ditutup (maksimal 1 koneksi aktif) atau token tidak dikunci ke IP rumah.' + (detailSuffix ? ' ' + detailSuffix : '') };
+  if (info.code === 404 || info.code === 410) return { title: 'Alamat stream sudah tidak aktif', body: 'Server menjawab dengan kode ' + info.code + '. Channel ini kemungkinan sudah mati atau pindah alamat. Coba perbarui playlist.' + (detailSuffix ? ' ' + detailSuffix : '') };
+  if (info.code === 502) return { title: 'Server stream menolak koneksi VPS', body: 'Server ZanTV gagal mengambil stream (kode 502). Provider stream kemungkinan mengunci token ke IP internet rumahmu (memblokir IP VPS) atau tautannya sudah kedaluwarsa.' + (detailSuffix ? ' ' + detailSuffix : '') };
   if (mixed) return { title: 'Stream http diblokir browser', body: 'ZanTV dibuka lewat https, sedangkan alamat stream ini masih http dan servernya tidak menyediakan versi https. Browser memblokir campuran ini demi keamanan. Buka di VLC, atau jalankan ZanTV dari http://localhost.' };
   if (ch.needsHeaders && !E.viaProxy) return { title: 'Channel ini butuh pengaturan khusus', body: 'Playlist meminta User-Agent atau Referer tertentu, dan halaman web tidak diizinkan mengaturnya. Channel seperti ini biasanya hanya jalan di VLC atau aplikasi IPTV.' };
-  if (info.kind === 'network') return { title: 'Stream tidak bisa dijangkau', body: 'Server sedang mati, token stream hanya berlaku di IP rumah (bukan IP VPS), atau koneksi terputus' + (info.code && info.code > 0 ? ' (kode ' + info.code + ')' : '') + '.' };
-  return { title: 'Stream gagal diputar', body: 'Format video dari server ini tidak bisa dibaca browser ini atau stream kosong. Coba pastikan VLC sudah ditutup lalu klik Coba lagi.' };
+  if (info.kind === 'network') return { title: 'Stream tidak bisa dijangkau', body: 'Server sedang mati, token stream kedaluwarsa, atau koneksi terputus' + (info.code && info.code > 0 ? ' (kode ' + info.code + ')' : '') + '.' + (detailSuffix ? ' ' + detailSuffix : '') };
+  return { title: 'Stream gagal diputar', body: 'Format video dari server ini tidak bisa dibaca browser ini atau stream kosong.' + (detailSuffix ? ' ' + detailSuffix : '') + ' Coba ganti server atau klik Coba lagi.' };
 }
 
 var busyTimer = null;

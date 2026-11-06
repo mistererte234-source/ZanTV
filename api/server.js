@@ -876,6 +876,17 @@ async function handle(req, res) {
   const method = req.method;
   const ip = req.headers['x-real-ip'] || req.socket.remoteAddress;
 
+  if (method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': req.headers.origin || '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Range, Authorization, X-ZanTV, User-Agent, Referer, Accept',
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Max-Age': '86400'
+    });
+    return res.end();
+  }
+
   if (!p.startsWith('/api/')) throw fail(404, 'Tidak ditemukan');
   // perlindungan CSRF: permintaan yang mengubah data wajib membawa header khusus
   if (method !== 'GET' && req.headers['x-zantv'] !== '1' && p !== '/api/activity') throw fail(403, 'Permintaan ditolak');
@@ -1622,11 +1633,19 @@ async function handle(req, res) {
 
 
   /* Relay stream HLS/TS dengan injeksi header HTTP standar M3U, anti multi-connect MAC, penyambung TS otomatis, & kompresi resolusi FFmpeg */
-  if (p === '/api/stream' && method === 'GET') {
+  if (p === '/api/stream' && (method === 'GET' || method === 'HEAD')) {
     const rawU = url.searchParams.get('u') || '';
     const ua = (url.searchParams.get('ua') || '').slice(0, 300);
     const ref = (url.searchParams.get('ref') || '').slice(0, 300);
     const org = (url.searchParams.get('org') || '').slice(0, 300);
+    const clientOrigin = req.headers.origin;
+    const streamCors = {
+      'Access-Control-Allow-Origin': clientOrigin || '*',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Content-Type',
+      ...(clientOrigin ? { 'Access-Control-Allow-Credentials': 'true' } : {})
+    };
     const reqQ = +(url.searchParams.get('q') || 0);
     const q = (reqQ === 360 || reqQ === 480 || reqQ === 720) ? reqQ : 0;
     const forceTranscode = url.searchParams.get('transcode') === '1';
@@ -1743,8 +1762,9 @@ async function handle(req, res) {
       const reqHeaders = {
         'User-Agent': useUa,
         'Accept': '*/*',
-        'Icy-MetaData': '1'
+        'Accept-Encoding': 'identity'
       };
+      if (!isTsLike) reqHeaders['Icy-MetaData'] = '1';
       if (sendClientIp && uIp && !privateIp(uIp)) {
         reqHeaders['X-Forwarded-For'] = uIp;
         reqHeaders['X-Real-IP'] = uIp;
@@ -1866,7 +1886,13 @@ async function handle(req, res) {
           }
           absUrl.search = aParams.toString();
         }
-        return '/api/stream?u=' + encodeURIComponent(absUrl.toString()) + suffix + '&seg=1';
+        const p = new URLSearchParams();
+        p.set('u', absUrl.toString());
+        if (ua) p.set('ua', ua);
+        if (ref) p.set('ref', ref);
+        if (org) p.set('org', org);
+        p.set('seg', '1');
+        return '/api/stream?' + p.toString();
       } catch (e) { return rel; }
     };
 
@@ -1876,9 +1902,8 @@ async function handle(req, res) {
         res.writeHead(200, {
           'Content-Type': 'video/mp2t',
           'Cache-Control': 'no-store',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Headers': '*',
-          'X-Accel-Buffering': 'no'
+          'X-Accel-Buffering': 'no',
+          ...streamCors
         });
         const ff = startFfmpegPipe(q, target.toString(), chosenUa);
         if (ff) return;
@@ -1890,25 +1915,25 @@ async function handle(req, res) {
           const t = line.trim();
           if (!t) return line;
           if (t.startsWith('#')) {
-            return line.replace(/URI="([^"]+)"/gi, (_, u1) => 'URI="' + wrapUrl(u1) + '"');
+            return line.replace(/URI=["']([^"']+)["']/gi, (_, u1) => 'URI="' + wrapUrl(u1) + '"');
           }
           return wrapUrl(t);
         }).join('\n');
+        const outBuf = Buffer.from(rewritten, 'utf8');
         res.writeHead(200, {
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
+          'Content-Length': outBuf.length,
           'Cache-Control': 'no-store',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Headers': '*',
-          'X-Accel-Buffering': 'no'
+          'X-Accel-Buffering': 'no',
+          ...streamCors
         });
-        return res.end(rewritten);
+        return res.end(outBuf);
       }
       res.writeHead(upRes.status, {
         'Content-Type': ct || 'application/octet-stream',
         'Cache-Control': 'no-store',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': '*',
-        'X-Accel-Buffering': 'no'
+        'X-Accel-Buffering': 'no',
+        ...streamCors
       });
       return res.end(buf);
     }
@@ -1922,9 +1947,8 @@ async function handle(req, res) {
         'Pragma': 'no-cache',
         'Expires': '0',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': '*',
-        'X-Accel-Buffering': 'no'
+        'X-Accel-Buffering': 'no',
+        ...streamCors
       });
       if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
@@ -2124,9 +2148,8 @@ async function handle(req, res) {
     const outHeaders = {
       'Content-Type': upRes.headers.get('content-type') || 'video/mp2t',
       'Cache-Control': 'no-store',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': '*',
-      'X-Accel-Buffering': 'no'
+      'X-Accel-Buffering': 'no',
+      ...streamCors
     };
     const cl = upRes.headers.get('content-length');
     if (cl) outHeaders['Content-Length'] = cl;

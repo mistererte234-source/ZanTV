@@ -15,4 +15,4 @@ cp -r api/* /opt/zantv-api/ 2>/dev/null || true
 echo "🔄 [ZanTV] Restarting Backend API Service..."
 systemctl restart zantv-api 2>/dev/null || true
 
-echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.33 sudah aktif."
+echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.34 sudah aktif."
