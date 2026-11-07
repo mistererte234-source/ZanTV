@@ -378,6 +378,9 @@
       ref: streamRef,
       ua: streamUa,
       origin: streamOrigin,
+      servers: (M.currentDetail && M.currentDetail.servers) || [{ id: 'p3', name: 'Server 3' }, { id: 'p1', name: 'Server 1' }],
+      activeServer: M.selectedServer,
+      activeServerName: 'Server ' + (streamRes.server || M.selectedServer).toUpperCase(),
       sources: [
         {
           url: streamRes.streamUrl,
@@ -548,6 +551,11 @@
     loadMovies: loadMovies,
     openMovieDetail: openMovieDetail,
     playCurrentSelection: playCurrentSelection,
+    switchServer: function (tabId) {
+      if (!tabId) return;
+      M.selectedServer = tabId;
+      playCurrentSelection();
+    },
     onEnter: function () {
       if (!M.movies || !M.movies.length) {
         loadMovies(false);

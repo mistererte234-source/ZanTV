@@ -1781,28 +1781,16 @@ async function handle(req, res) {
     const isM3u8 = ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname);
     const suffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
       (ref ? '&ref=' + encodeURIComponent(ref) : '') +
-      (org ? '&org=' + encodeURIComponent(org) : '');
+      (org ? '&org=' + encodeURIComponent(org) : '') +
+      '&seg=1';
     const wrapUrl = (rel) => {
       try {
         const absUrl = new URL(rel, target);
-        // Jika target memiliki query params (token, hash, auth), wariskan ke sub-manifest/segmen agar CDN tidak menolak (403)!
+        // Jika target memiliki query params dan rel tidak punya, wariskan query params target
         if (target.search && !absUrl.search) {
           absUrl.search = target.search;
-        } else if (target.search && absUrl.search) {
-          const tParams = new URLSearchParams(target.search);
-          const aParams = new URLSearchParams(absUrl.search);
-          for (const [k, v] of tParams.entries()) {
-            if (!aParams.has(k)) aParams.set(k, v);
-          }
-          absUrl.search = aParams.toString();
         }
-        const p = new URLSearchParams();
-        p.set('u', absUrl.toString());
-        if (ua) p.set('ua', ua);
-        if (ref) p.set('ref', ref);
-        if (org) p.set('org', org);
-        p.set('seg', '1');
-        return '/api/stream?' + p.toString();
+        return '/api/stream?u=' + encodeURIComponent(absUrl.toString()) + suffix;
       } catch (e) { return rel; }
     };
 
