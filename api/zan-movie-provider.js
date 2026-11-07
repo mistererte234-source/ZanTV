@@ -404,10 +404,34 @@ async function extractStream(movieUrl, tabId) {
   };
 }
 
+function getActiveMirror() {
+  return activeMirror;
+}
+
+function setActiveMirror(newMirror) {
+  if (typeof newMirror === 'string' && newMirror.trim().startsWith('http')) {
+    activeMirror = newMirror.trim().replace(/\/+$/, '');
+    if (!KNOWN_MIRRORS.includes(activeMirror)) {
+      KNOWN_MIRRORS.unshift(activeMirror);
+    }
+  }
+  return activeMirror;
+}
+
+function getMirrors() {
+  return {
+    active: activeMirror,
+    mirrors: KNOWN_MIRRORS
+  };
+}
+
 module.exports = {
   CATEGORIES,
   getCatalog,
   search,
   getDetail,
-  extractStream
+  extractStream,
+  getActiveMirror,
+  setActiveMirror,
+  getMirrors
 };

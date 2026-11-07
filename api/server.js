@@ -82,6 +82,9 @@ function save() {
   dbMtime = fs.statSync(DB_FILE).mtimeMs;
 }
 load();
+if (db.movieMirror && movieProvider && typeof movieProvider.setActiveMirror === 'function') {
+  movieProvider.setActiveMirror(db.movieMirror);
+}
 
 /* ---------------- kata sandi & sesi ---------------- */
 function hashPassword(pw, salt) {
@@ -1085,6 +1088,34 @@ async function handle(req, res) {
   if (!me && p !== '/api/stream') throw fail(401, 'Silakan masuk dulu');
   const admin = me && me.role === 'admin';
   const needAdmin = () => { if (!admin) throw fail(403, 'Hanya admin yang boleh melakukan ini'); };
+
+  /* Status & kelola mirror provider film (Admin Only) */
+  if (p === '/api/movie/admin/mirror' && method === 'GET') {
+    needAdmin();
+    if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const info = movieProvider.getMirrors ? movieProvider.getMirrors() : { active: 'https://klikxxi.shop', mirrors: ['https://klikxxi.shop'] };
+    return send(res, 200, {
+      ok: true,
+      active: info.active,
+      mirrors: info.mirrors
+    });
+  }
+
+  if (p === '/api/movie/admin/mirror' && method === 'POST') {
+    needAdmin();
+    const b = await readBody(req, 4096);
+    const newUrl = String(b.url || '').trim();
+    if (!newUrl || !/^https?:\/\//i.test(newUrl)) {
+      throw fail(400, 'Alamat URL mirror harus diawali http:// atau https://');
+    }
+    if (!movieProvider) throw fail(503, 'Movie provider not available');
+    const updated = movieProvider.setActiveMirror(newUrl);
+    db.movieMirror = updated;
+    save();
+    vodCache.clear();
+    console.log('[ZanTV] Movie mirror updated by admin:', updated);
+    return send(res, 200, { ok: true, active: updated });
+  }
 
   if (p === '/api/logout' && method === 'POST') {
     logEvent(req, me.name, 'logout', me.gpsItem ? { gpsLabel: me.gpsItem.label } : undefined);

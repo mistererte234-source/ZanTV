@@ -1785,7 +1785,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
   el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
-    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.43 · Token #' + E.token + '</small>';
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.44 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
@@ -1959,7 +1959,8 @@ window.ZanTV = {
     if (window.ZanVod && typeof window.ZanVod.applyMode === 'function') {
       window.ZanVod.applyMode(mode);
     }
-  }
+  },
+  isAdmin: isAdmin
 };
 
 /* ------------------------------------------------------------------ */
@@ -3791,6 +3792,19 @@ $('#logoutBtn').addEventListener('click', function () {
   api('POST', '/api/logout').catch(function () {}).then(function () { onLoggedOut(); toast('Kamu sudah keluar'); });
 });
 
+var acctMovieAdminBtn = $('#acctMovieAdminBtn');
+if (acctMovieAdminBtn) {
+  acctMovieAdminBtn.addEventListener('click', function () {
+    var acct = $('#acctDialog');
+    if (acct && typeof acct.close === 'function') {
+      try { acct.close(); } catch (e) {}
+    }
+    if (window.ZanMovie && typeof window.ZanMovie.openAdmin === 'function') {
+      window.ZanMovie.openAdmin();
+    }
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Aktivitas pengguna (khusus admin)                                    */
 /* ------------------------------------------------------------------ */
@@ -4030,7 +4044,7 @@ if (freshBtnEl) {
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js?v=1.7.43').then(function (reg) {
+    navigator.serviceWorker.register('sw.js?v=1.7.44').then(function (reg) {
       if (reg) {
         reg.update().catch(function () {});
         reg.addEventListener('updatefound', function () {

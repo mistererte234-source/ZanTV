@@ -3001,6 +3001,22 @@ body.stage-theater-fullscreen .foot {
   border-color: #38bdf8;
   color: #38bdf8;
 }
+.movie-mirror-chip {
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.movie-mirror-chip:hover, .movie-mirror-chip.is-active {
+  background: rgba(34, 211, 238, 0.15);
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
 
 /* ==========================================================================
    Responsive Adaptations for VOD & Bioskop 21

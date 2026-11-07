@@ -63,6 +63,12 @@
     el.movieEpSection = document.getElementById('movieEpSection');
     el.movieEpCount = document.getElementById('movieEpCount');
     el.movieEpList = document.getElementById('movieEpList');
+
+    // Admin Dialog Elements
+    el.movieAdminBtn = document.getElementById('movieAdminBtn');
+    el.acctMovieAdminBtn = document.getElementById('acctMovieAdminBtn');
+    el.movieAdminDialog = document.getElementById('movieAdminDialog');
+    el.movieAdminList = document.getElementById('movieAdminList');
   }
 
   /* ---------------- API CLIENT ---------------- */
@@ -84,6 +90,28 @@
       clearTimeout(timer);
       console.warn('[ZanMovie] API error:', endpoint, e);
       return null;
+    }
+  }
+
+  async function apiPost(endpoint, body) {
+    var url = '/api/movie/' + endpoint;
+    var ac = new AbortController();
+    var timer = setTimeout(function () { ac.abort(); }, 8000);
+    try {
+      var res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-ZanTV': '1' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body || {}),
+        signal: ac.signal
+      });
+      clearTimeout(timer);
+      var data = await res.json();
+      if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+      return data;
+    } catch (e) {
+      clearTimeout(timer);
+      throw e;
     }
   }
 
@@ -544,6 +572,130 @@
         if (e.target === el.movieSheet) closeMovieSheet();
       });
     }
+
+    // Admin Button di Movie Topbar & Dialog Akun
+    if (el.movieAdminBtn) {
+      el.movieAdminBtn.addEventListener('click', openMovieAdminDialog);
+    }
+    if (el.acctMovieAdminBtn) {
+      el.acctMovieAdminBtn.addEventListener('click', function () {
+        var acctDlg = document.getElementById('acctDialog');
+        if (acctDlg && typeof acctDlg.close === 'function') {
+          try { acctDlg.close(); } catch (e) {}
+        }
+        openMovieAdminDialog();
+      });
+    }
+  }
+
+  /* ---------------- ADMIN: KELOLA MIRROR PROVIDER ---------------- */
+  async function openMovieAdminDialog() {
+    if (!el.movieAdminDialog) return;
+
+    if (el.movieAdminList) {
+      el.movieAdminList.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted)">Memuat status mirror...</div>';
+    }
+
+    if (typeof el.movieAdminDialog.showModal === 'function') {
+      try { el.movieAdminDialog.showModal(); } catch (e) { el.movieAdminDialog.setAttribute('open', ''); }
+    } else {
+      el.movieAdminDialog.setAttribute('open', '');
+    }
+
+    try {
+      var info = await apiGet('admin/mirror');
+      if (!info || !info.ok) throw new Error((info && info.error) || 'Gagal mengambil data mirror');
+      renderAdminMirrorUI(info.active, info.mirrors || []);
+    } catch (err) {
+      if (el.movieAdminList) {
+        el.movieAdminList.innerHTML = '<div style="padding:16px;text-align:center;color:#ef4444">⚠️ ' + escapeHtml(err.message || 'Gagal memuat status mirror') + '</div>';
+      }
+    }
+  }
+
+  function renderAdminMirrorUI(activeUrl, mirrors) {
+    if (!el.movieAdminList) return;
+    activeUrl = activeUrl || 'https://klikxxi.shop';
+    mirrors = mirrors || [];
+    if (mirrors.indexOf(activeUrl) === -1) mirrors.unshift(activeUrl);
+
+    var chipsHtml = mirrors.map(function (m) {
+      var isCur = m === activeUrl;
+      return '<button type="button" class="movie-mirror-chip' + (isCur ? ' is-active' : '') + '" data-mirror="' + escapeHtml(m) + '">' +
+        (isCur ? '✓ ' : '') + escapeHtml(m.replace(/^https?:\/\//, '')) +
+      '</button>';
+    }).join('');
+
+    el.movieAdminList.innerHTML =
+      '<div class="movie-admin-item">' +
+        '<div class="movie-admin-head">' +
+          '<div class="movie-admin-info">' +
+            '<span class="movie-admin-icon">🎬</span>' +
+            '<div class="movie-admin-title-box">' +
+              '<strong class="movie-admin-title">Sumber Bioskop & Series 2026</strong>' +
+              '<span class="movie-admin-status-pill">🟢 Aktif: ' + escapeHtml(activeUrl) + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="movie-admin-desc">Jika domain utama terblokir internet positif/Kominfo, ganti link mirror di bawah ini agar katalog & stream tetap normal tanpa restart server.</div>' +
+        '<div class="movie-admin-url-box">' +
+          '<span class="movie-admin-url-label">Domain:</span>' +
+          '<input type="url" class="movie-admin-url-input" id="movieMirrorInput" value="' + escapeHtml(activeUrl) + '" placeholder="https://klikxxi.shop" autocomplete="off" spellcheck="false">' +
+          '<button type="button" class="btn primary movie-admin-url-btn" id="movieMirrorSaveBtn">Simpan Link</button>' +
+        '</div>' +
+        '<div style="margin-top:8px;">' +
+          '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;">Pilih Cepat Mirror Cadangan:</div>' +
+          '<div class="movie-mirror-chips" id="movieMirrorChips" style="display:flex;flex-wrap:wrap;gap:6px;">' +
+            chipsHtml +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    var saveBtn = document.getElementById('movieMirrorSaveBtn');
+    var inputEl = document.getElementById('movieMirrorInput');
+    var chipsWrap = document.getElementById('movieMirrorChips');
+
+    if (chipsWrap && inputEl) {
+      chipsWrap.addEventListener('click', function (e) {
+        var chip = e.target.closest('.movie-mirror-chip');
+        if (!chip) return;
+        var targetMirror = chip.getAttribute('data-mirror');
+        if (targetMirror) {
+          inputEl.value = targetMirror;
+          chipsWrap.querySelectorAll('.movie-mirror-chip').forEach(function (c) {
+            c.classList.toggle('is-active', c === chip);
+          });
+        }
+      });
+    }
+
+    if (saveBtn && inputEl) {
+      saveBtn.addEventListener('click', async function () {
+        var newMirror = inputEl.value.trim();
+        if (!newMirror || !/^https?:\/\//i.test(newMirror)) {
+          showToast('⚠️ Masukkan alamat lengkap (harus diawali https://)');
+          return;
+        }
+
+        try {
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Menyimpan...';
+          var res = await apiPost('admin/mirror', { url: newMirror });
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Tersimpan ✓';
+          setTimeout(function () { saveBtn.textContent = 'Simpan Link'; }, 2000);
+
+          showToast('✅ Link mirror bioskop berhasil diperbarui: ' + res.active);
+          renderAdminMirrorUI(res.active, mirrors);
+          // Muat ulang katalog agar langsung mengambil dari mirror baru
+          loadMovies(false);
+        } catch (err) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Simpan Link';
+          showToast('❌ Gagal menyimpan mirror: ' + (err.message || 'Error'));
+        }
+      });
+    }
   }
 
   /* ---------------- PUBLIC API EXPORTS ---------------- */
@@ -551,6 +703,7 @@
     loadMovies: loadMovies,
     openMovieDetail: openMovieDetail,
     playCurrentSelection: playCurrentSelection,
+    openAdmin: openMovieAdminDialog,
     switchServer: function (tabId) {
       if (!tabId) return;
       M.selectedServer = tabId;
