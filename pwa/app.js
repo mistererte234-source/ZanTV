@@ -160,12 +160,12 @@ function parseM3U(text, pl) {
   var out = [];
   var defUa = (pl && pl.userAgent) || '';
   var defRef = (pl && pl.referer) || '';
-  var attrs = {}, name = null, ua = null, ref = null, org = null, drm = false, clearKeys = null;
+  var attrs = {}, name = null, ua = null, ref = null, org = null, drm = false, clearKeys = null, licenseServer = null;
   var attrRe = /([\w-]+)="([^"]*)"/g;
   var lastChannel = null;
 
   function reset() {
-    attrs = {}; name = null; ua = null; ref = null; org = null; drm = false; clearKeys = null;
+    attrs = {}; name = null; ua = null; ref = null; org = null; drm = false; clearKeys = null; licenseServer = null;
   }
 
   for (var i = 0; i < lines.length; i++) {
@@ -208,18 +208,21 @@ function parseM3U(text, pl) {
         if (parsedCk) {
           clearKeys = Object.assign(clearKeys || {}, parsedCk);
           drm = false;
+        } else if (/^https?:\/\//i.test(lk)) {
+          licenseServer = lk.split('|')[0].trim();
+          drm = false;
         } else {
           drm = true;
         }
       } else if (/^#KODIPROP:.*inputstream\.adaptive\.license_type=(org\.w3\.clearkey|clearkey)/i.test(line)) {
         drm = false;
       } else if (/^#KODIPROP:.*(license_type|license_key|drm)/i.test(line)) {
-        drm = true;
+        if (!licenseServer && !clearKeys) drm = true;
       }
       continue;
     } else {
       var url = line, pipe = url.indexOf('|');
-      var lineUa = ua, lineRef = ref, lineOrg = org, lineClearKeys = clearKeys;
+      var lineUa = ua, lineRef = ref, lineOrg = org, lineClearKeys = clearKeys, lineLicenseServer = licenseServer;
       if (pipe > 0) {
         var extra = url.slice(pipe + 1);
         url = url.slice(0, pipe);
@@ -231,6 +234,9 @@ function parseM3U(text, pl) {
             var parsedCk = parseClearKeys(val);
             if (parsedCk) {
               lineClearKeys = Object.assign(lineClearKeys || {}, parsedCk);
+              drm = false;
+            } else if (/^https?:\/\//i.test(val)) {
+              lineLicenseServer = val.split('|')[0].trim();
               drm = false;
             }
           }
@@ -247,13 +253,18 @@ function parseM3U(text, pl) {
         ua: finalUa,
         ref: finalRef,
         origin: finalOrg,
-        clearKeys: lineClearKeys ? Object.assign({}, lineClearKeys) : null
+        clearKeys: lineClearKeys ? Object.assign({}, lineClearKeys) : null,
+        licenseServer: lineLicenseServer || null
       };
 
       if (lastChannel) {
         lastChannel.sources.push(srcObj);
         if (!lastChannel.clearKeys && lineClearKeys) {
           lastChannel.clearKeys = Object.assign({}, lineClearKeys);
+          lastChannel.drm = false;
+        }
+        if (!lastChannel.licenseServer && lineLicenseServer) {
+          lastChannel.licenseServer = lineLicenseServer;
           lastChannel.drm = false;
         }
       } else {
@@ -271,6 +282,7 @@ function parseM3U(text, pl) {
           needsHeaders: !!(finalUa || finalRef || finalOrg),
           drm: drm,
           clearKeys: lineClearKeys ? Object.assign({}, lineClearKeys) : null,
+          licenseServer: lineLicenseServer || null,
           sources: [srcObj]
         };
         out.push(ch);
@@ -993,6 +1005,8 @@ function kindOf(url) {
   if (/\.mpd$/.test(u) || /[?&](extension|output|format)=mpd\b/.test(full)) return 'dash';
   if (/\.flv$/.test(u) || /[?&](extension|output|format)=flv\b/.test(full)) return 'flv';
   if (/\.ts$/.test(u) || /[?&](extension|output|type|format)=(ts|mpegts)\b/.test(full) || /\/play\/live\.php\b/.test(full) || /\/live\/play\//.test(full)) return 'mpegts';
+  // Xtream Codes extensionless live stream: http(s)://host:port/<user>/<pass>/<stream_id> atau /live/<user>/<pass>/<stream_id>
+  if (/^https?:\/\/[^/]+\/(?:live\/)?[^/?#]+\/[^/?#]+\/\d+$/.test(u)) return 'mpegts';
   if (/\.(mp4|m4v|webm|ogv|mov|mp3|aac|m4a|ogg|opus)$/.test(u)) return 'native';
   if (/^(rtmp|rtsp|udp):/i.test(url)) return 'unsupported';
   return 'hls'; // kebanyakan stream IPTV tanpa ekstensi adalah HLS
@@ -1414,6 +1428,7 @@ function startShaka(url, token, ch, currentClearKeys) {
     };
 
     var keys = currentClearKeys || (ch && ch.clearKeys);
+    var licSrv = (ch && ch.licenseServer) || null;
     if (keys) {
       var clearKeysObj = {};
       Object.keys(keys).forEach(function (rawKid) {
@@ -1429,6 +1444,13 @@ function startShaka(url, token, ch, currentClearKeys) {
           clearKeys: clearKeysObj
         };
       }
+    } else if (licSrv) {
+      cfg.drm = {
+        servers: {
+          'org.w3.clearkey': licSrv,
+          'com.widevine.alpha': licSrv
+        }
+      };
     }
 
     p.configure(cfg);
@@ -1608,7 +1630,8 @@ function play(ch, opts) {
       ua: ch.ua || '',
       ref: ch.ref || '',
       origin: ch.origin || '',
-      clearKeys: ch.clearKeys || null
+      clearKeys: ch.clearKeys || null,
+      licenseServer: ch.licenseServer || null
     }];
   }
   if (srcIdx >= ch.sources.length) srcIdx = 0;
@@ -1619,6 +1642,8 @@ function play(ch, opts) {
   var currentRef = activeSrc.ref || ch.ref || '';
   var currentOrg = activeSrc.origin || ch.origin || '';
   var currentClearKeys = activeSrc.clearKeys || ch.clearKeys || null;
+  var currentLicenseServer = activeSrc.licenseServer || ch.licenseServer || null;
+  if (currentLicenseServer) ch.licenseServer = currentLicenseServer;
   var isVod = !!(ch.isVod || ch.isMovie);
   var currentNeedsHeaders = !!(currentUa || currentRef || currentOrg);
 
@@ -1809,7 +1834,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
   el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
-    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.46 · Token #' + E.token + '</small>';
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.47 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
@@ -4231,7 +4256,7 @@ if (freshBtnEl) {
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js?v=1.7.46').then(function (reg) {
+    navigator.serviceWorker.register('sw.js?v=1.7.47').then(function (reg) {
       if (reg) {
         reg.update().catch(function () {});
         reg.addEventListener('updatefound', function () {

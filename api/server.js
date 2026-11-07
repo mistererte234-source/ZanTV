@@ -297,6 +297,8 @@ function isDirectStreamUrl(u) {
   if (/\.(ts|mp4|mkv|flv|mpd|webm|aac|mp3)$/.test(pathPart)) return true;
   if (/[?&](extension|output|format)=(ts|mpegts|flv|mp4)\b/.test(s)) return true;
   if (/\/play\/live\.php\b/.test(s) || /\/live\/play\//.test(s)) return true;
+  // Xtream Codes extensionless live stream: /<user>/<pass>/<stream_id> atau /live/<user>/<pass>/<stream_id>
+  if (/^https?:\/\/[^/]+\/(?:live\/)?[^/?#]+\/[^/?#]+\/\d+$/.test(pathPart)) return true;
   return false;
 }
 function wrapSingleStreamM3U(u, name) {
@@ -1965,6 +1967,8 @@ async function handle(req, res) {
       return res.end(JSON.stringify({ error: 'Token stream dikunci ke IP perangkat asal atau VLC masih terbuka' }));
     }
     const isM3u8 = ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname);
+    const needsCustomHeaders = !!(ua || ref || org);
+    const isTargetHttps = target.protocol === 'https:';
     const suffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
       (ref ? '&ref=' + encodeURIComponent(ref) : '') +
       (org ? '&org=' + encodeURIComponent(org) : '') +
@@ -1975,6 +1979,11 @@ async function handle(req, res) {
         // Jika target memiliki query params dan rel tidak punya, wariskan query params target
         if (target.search && !absUrl.search) {
           absUrl.search = target.search;
+        }
+        // Jika stream HTTPS publik dan tidak butuh custom header (seperti jorvakstreamcache),
+        // kembalikan URL absolut langsung ke CDN agar browser mengambil segmen menggunakan IP asli user (bebas blokir IP VPS & super cepat!)
+        if (!needsCustomHeaders && isTargetHttps && absUrl.protocol === 'https:') {
+          return absUrl.toString();
         }
         return '/api/stream?u=' + encodeURIComponent(absUrl.toString()) + suffix;
       } catch (e) { return rel; }
