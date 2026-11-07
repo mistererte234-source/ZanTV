@@ -312,7 +312,10 @@ var el = {
   vodScrubInput: $('#vodScrubInput'), vodRewindBtn: $('#vodRewindBtn'), vodForwardBtn: $('#vodForwardBtn'),
   vodTimeCurrent: $('#vodTimeCurrent'), vodTimeDuration: $('#vodTimeDuration'),
   vodServerBtn: $('#vodServerBtn'), vodServerLabel: $('#vodServerLabel'),
-  vodServerMenu: $('#vodServerMenu'), vodServerCount: $('#vodServerCount'), vodServerList: $('#vodServerList')
+  vodServerMenu: $('#vodServerMenu'), vodServerCount: $('#vodServerCount'), vodServerList: $('#vodServerList'),
+  vodNextEpBtn: $('#vodNextEpBtn'), vodSpeedBtn: $('#vodSpeedBtn'), vodSpeedLabel: $('#vodSpeedLabel'),
+  ambilightBtn: $('#ambilightBtn'), ambilightCanvas: $('#ambilightCanvas'),
+  skipRippleLeft: $('#skipRippleLeft'), skipRippleRight: $('#skipRippleRight')
 };
 
 function formatVodTime(sec) {
@@ -957,7 +960,7 @@ var QUAL = {
   activeHeight: 0,
   clientScaledH: 0
 };
-var CC = { mode: LS.get('cc-mode', 'off'), srcLang: LS.get('cc-src', 'en-US'), hasTrack: false, sr: null, srRunning: false, hideTimer: null, lastRaw: '', reqSeq: 0, cache: {} };
+var CC = { mode: LS.get('cc-mode', 'off'), srcLang: LS.get('cc-src', 'en-US'), hasTrack: false, sr: null, srRunning: false, hideTimer: null, lastRaw: '', reqSeq: 0, cache: {}, vodCues: null, vodSubs: null, activeCueText: '' };
 
 function destroyEngine() {
   clearTimeout(E.stall);
@@ -965,6 +968,9 @@ function destroyEngine() {
   stopSpeechCc();
   clearCcDisplay();
   CC.hasTrack = false;
+  CC.vodCues = null;
+  CC.vodSubs = null;
+  CC.activeCueText = '';
   QUAL.levels = [];
   QUAL.activeHeight = 0;
   QUAL.clientScaledH = 0;
@@ -1637,6 +1643,23 @@ function play(ch, opts) {
         el.vodServerBtn.hidden = true;
       }
     }
+    if (el.vodNextEpBtn) {
+      if (ch.hasNextEpisode) {
+        el.vodNextEpBtn.hidden = false;
+        el.vodNextEpBtn.title = ch.nextEpisodeTitle ? ('Putar ' + ch.nextEpisodeTitle) : 'Episode Berikutnya';
+      } else {
+        el.vodNextEpBtn.hidden = true;
+      }
+    }
+    if (ch.subtitles && ch.subtitles.length > 0) {
+      CC.vodSubs = ch.subtitles;
+      CC.hasTrack = true;
+      if (CC.mode === 'off') {
+        CC.mode = 'id';
+        LS.set('cc-mode', 'id');
+      }
+      loadVodSubtitleForMode(CC.mode);
+    }
   } else {
     var bar = el.stageVodBar || document.getElementById('stageVodBar');
     if (bar) {
@@ -1645,6 +1668,7 @@ function play(ch, opts) {
     }
     if (el.vodServerBtn) el.vodServerBtn.hidden = true;
     if (el.vodServerMenu) el.vodServerMenu.hidden = true;
+    if (el.vodNextEpBtn) el.vodNextEpBtn.hidden = true;
   }
 
   if (opts.seekTime && opts.seekTime > 0) {
@@ -1785,7 +1809,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
   el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
-    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.45 · Token #' + E.token + '</small>';
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.46 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
@@ -1835,7 +1859,7 @@ function hideMsg() { el.msg.hidden = true; el.stage.classList.remove('has-msg');
 
 /* status video */
 el.video.addEventListener('playing', function () {
-  clearTimeout(E.stall); setBusy(false); E.retries = 0;
+  clearTimeout(E.stall); setBusy(false); E.retries = 0; E.hasPlayed = true;
   el.liveTag.hidden = isVerticalVideo() || !!(S.playing && S.playing.isVod); syncPlay(); updateNow();
   if (el.video.videoHeight) QUAL.activeHeight = el.video.videoHeight;
   if (QUAL.mode === 'saver' || (QUAL.mode === 'target' && QUAL.targetH > 0)) {
@@ -1886,6 +1910,10 @@ el.video.addEventListener('pause', function () { W.last = 0; });
 el.video.addEventListener('waiting', function () { W.last = 0; });
 el.video.addEventListener('volumechange', syncMute);
 el.video.addEventListener('ended', function () {
+  if (S.playing && S.playing.isMovie && S.playing.hasNextEpisode && window.ZanMovie && typeof window.ZanMovie.playNextEpisode === 'function') {
+    window.ZanMovie.playNextEpisode();
+    return;
+  }
   if (S.playing && S.playing.isVod && window.ZanVod) {
     var hasNext = window.ZanVod.playNextEpisode();
     if (hasNext) toast('Memutar episode berikutnya...');
@@ -1924,6 +1952,7 @@ function stopPlayback(opts) {
   }
   if (el.vodServerBtn) el.vodServerBtn.hidden = true;
   if (el.vodServerMenu) el.vodServerMenu.hidden = true;
+  if (el.vodNextEpBtn) el.vodNextEpBtn.hidden = true;
   if (el.vodScrubInput) el.vodScrubInput.value = 0;
   if (el.vodScrubProgress) el.vodScrubProgress.style.width = '0%';
   if (el.vodScrubBuffer) el.vodScrubBuffer.style.width = '0%';
@@ -2431,16 +2460,76 @@ function syncCcEngine() {
   updateCcUi();
 }
 
+function loadVodSubtitleForMode(mode) {
+  if (!CC.vodSubs || !CC.vodSubs.length || mode === 'off') {
+    CC.vodCues = null;
+    CC.activeCueText = '';
+    clearCcDisplay();
+    return;
+  }
+  var wantedLang = (mode === 'en') ? 'en' : 'id';
+  var picked = CC.vodSubs.find(function (s) { return s.lang === wantedLang; }) || CC.vodSubs[0];
+  if (!picked || !picked.url) return;
+  if (CC.vodCues && CC._loadedSubUrl === picked.url) {
+    renderVodSubtitleCue(el.video ? el.video.currentTime : 0);
+    return;
+  }
+  CC._loadedSubUrl = picked.url;
+  api('GET', '/api/movie/subtitle?u=' + encodeURIComponent(picked.url) + '&format=json')
+    .then(function (res) {
+      if (res && Array.isArray(res.cues)) {
+        CC.vodCues = res.cues;
+        CC.hasTrack = true;
+        stopSpeechCc();
+        updateCcUi();
+        renderVodSubtitleCue(el.video ? el.video.currentTime : 0);
+      }
+    })
+    .catch(function () {});
+}
+
+function renderVodSubtitleCue(curTime) {
+  if (CC.mode === 'off' || !CC.vodCues || !CC.vodCues.length) return;
+  var activeText = '';
+  for (var i = 0; i < CC.vodCues.length; i++) {
+    var c = CC.vodCues[i];
+    if (curTime >= c.start && curTime <= c.end) {
+      activeText = c.text;
+      break;
+    }
+    if (c.start > curTime + 2) break;
+  }
+  if (activeText === CC.activeCueText) return;
+  CC.activeCueText = activeText;
+  var box = $('#ccBox'), txt = $('#ccText'), orig = $('#ccOrig');
+  if (!box || !txt) return;
+  clearTimeout(CC.hideTimer);
+  if (!activeText) {
+    box.hidden = true;
+    txt.textContent = '';
+    if (orig) orig.hidden = true;
+    return;
+  }
+  txt.textContent = activeText;
+  if (orig) orig.hidden = true;
+  box.hidden = false;
+}
+
 function setCcMode(mode) {
   CC.mode = mode;
   LS.set('cc-mode', mode);
+  if (CC.vodSubs && CC.vodSubs.length) {
+    loadVodSubtitleForMode(mode);
+  }
   syncCcEngine();
   if (mode === 'off') {
     toast('Auto CC (Subtitle) dimatikan');
   } else {
     var label = mode === 'id' ? 'Terjemahan Indonesia' : mode === 'en' ? 'Terjemahan Inggris' : 'Bahasa Asli';
     toast('Auto CC aktif: ' + label);
-    showCcCue(CC.hasTrack ? 'Subtitle stream aktif (' + label + ')' : 'Auto CC siap menerjemahkan dialog (' + label + ')…', true, 'System');
+    if (!CC.vodCues) {
+      showCcCue(CC.hasTrack ? 'Subtitle stream aktif (' + label + ')' : 'Auto CC siap menerjemahkan dialog (' + label + ')…', true, 'System');
+    }
   }
 }
 function updateNow() {
@@ -3122,6 +3211,7 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
   el.video.addEventListener('timeupdate', function () {
     if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
       updateVodScrubberUi(el.video.currentTime, el.video.duration);
+      renderVodSubtitleCue(el.video.currentTime);
       if (window.ZanMovie && typeof window.ZanMovie.onPlaybackProgress === 'function') {
         window.ZanMovie.onPlaybackProgress(el.video.currentTime, el.video.duration);
       }
@@ -3178,6 +3268,99 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
       }
     });
   }
+
+  /* Next Episode Button (TV Series / K-Drama / Dracin) */
+  if (el.vodNextEpBtn) {
+    el.vodNextEpBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (window.ZanMovie && typeof window.ZanMovie.playNextEpisode === 'function') {
+        window.ZanMovie.playNextEpisode();
+      } else if (window.ZanVod && typeof window.ZanVod.playNextEpisode === 'function') {
+        window.ZanVod.playNextEpisode();
+      }
+    });
+  }
+
+  /* Playback Speed Control (1.0x -> 1.25x -> 1.5x -> 2.0x -> 0.75x) */
+  var speeds = [1.0, 1.25, 1.5, 2.0, 0.75];
+  var speedIdx = 0;
+  if (el.vodSpeedBtn) {
+    el.vodSpeedBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      speedIdx = (speedIdx + 1) % speeds.length;
+      var spd = speeds[speedIdx];
+      try { el.video.playbackRate = spd; } catch (err) {}
+      if (el.vodSpeedLabel) el.vodSpeedLabel.textContent = spd + 'x';
+      toast('⚡ Kecepatan Putar: ' + spd + 'x');
+      wakeUi();
+    });
+  }
+
+  /* Dynamic Ambilight Cinema Glow Engine */
+  var ambiOn = LS.get('ambilight', true) !== false;
+  var ambiCtx = el.ambilightCanvas ? el.ambilightCanvas.getContext('2d', { alpha: false }) : null;
+  function syncAmbilightUi() {
+    if (el.stage) el.stage.classList.toggle('is-ambilight-on', ambiOn);
+    if (el.ambilightBtn) {
+      el.ambilightBtn.classList.toggle('is-on', ambiOn);
+      el.ambilightBtn.setAttribute('aria-pressed', String(ambiOn));
+    }
+  }
+  syncAmbilightUi();
+  if (el.ambilightBtn) {
+    el.ambilightBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      ambiOn = !ambiOn;
+      LS.set('ambilight', ambiOn);
+      syncAmbilightUi();
+      toast(ambiOn ? '✨ Ambilight Cinema Glow: AKTIF' : 'Ambilight Cinema Glow: MATI');
+    });
+  }
+  if (ambiCtx) {
+    setInterval(function () {
+      if (!ambiOn || !S.playing || el.video.paused || el.video.ended || el.video.readyState < 2) return;
+      try {
+        ambiCtx.drawImage(el.video, 0, 0, 32, 18);
+      } catch (err) {}
+    }, 130);
+  }
+
+  /* Double-Tap Left/Right Gesture Skip (±10s Ripple) for VOD & Movies */
+  var lastTapTime = 0;
+  var lastTapSide = '';
+  var rippleTimerL = null, rippleTimerR = null;
+  function triggerSkipRipple(side) {
+    var rEl = side === 'left' ? el.skipRippleLeft : el.skipRippleRight;
+    if (!rEl) return;
+    rEl.classList.add('is-active');
+    if (side === 'left') {
+      clearTimeout(rippleTimerL);
+      rippleTimerL = setTimeout(function () { rEl.classList.remove('is-active'); }, 650);
+    } else {
+      clearTimeout(rippleTimerR);
+      rippleTimerR = setTimeout(function () { rEl.classList.remove('is-active'); }, 650);
+    }
+  }
+  el.stage.addEventListener('touchend', function (e) {
+    if (!S.playing || !(S.playing.isVod || S.playing.isMovie)) return;
+    if (e.target.closest('.controls, .msg, .player-pop, .stage-vod-bar, .stage-watermark, .stage-close-btn')) return;
+    if (!e.changedTouches || !e.changedTouches[0]) return;
+    var rect = el.stage.getBoundingClientRect();
+    if (!rect.width) return;
+    var relX = (e.changedTouches[0].clientX - rect.left) / rect.width;
+    var side = relX < 0.35 ? 'left' : (relX > 0.65 ? 'right' : 'center');
+    if (side === 'center') return;
+    var now = Date.now();
+    if (now - lastTapTime < 340 && lastTapSide === side) {
+      e.preventDefault();
+      window.vodSeekBy(side === 'left' ? -10 : 10);
+      triggerSkipRipple(side);
+      lastTapTime = 0;
+    } else {
+      lastTapTime = now;
+      lastTapSide = side;
+    }
+  });
 })();
 
 $('#retryBtn').addEventListener('click', function () {
@@ -3941,6 +4124,9 @@ function onLoggedOut(reasonMsg) {
 }
 function onLoggedIn(user) {
   ME = user;
+  if (user && user.appConfig && window.ZanMovie && typeof window.ZanMovie.applyAppConfig === 'function') {
+    window.ZanMovie.applyAppConfig(user.appConfig);
+  }
   clearSearch();
   gate.hidden = true;
   document.body.classList.toggle('is-admin', isAdmin());
@@ -4044,7 +4230,7 @@ if (freshBtnEl) {
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js?v=1.7.45').then(function (reg) {
+    navigator.serviceWorker.register('sw.js?v=1.7.46').then(function (reg) {
       if (reg) {
         reg.update().catch(function () {});
         reg.addEventListener('updatefound', function () {

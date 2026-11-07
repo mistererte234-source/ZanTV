@@ -65,14 +65,35 @@ const COOKIE = 'zantv_sid';
 
 /* ---------------- penyimpanan ---------------- */
 fs.mkdirSync(PL_DIR, { recursive: true, mode: 0o700 });
-let db = { users: {}, sessions: {}, playlists: [], blocked: {}, epg: null, movieProviders: {} };
+let db = { users: {}, sessions: {}, playlists: [], blocked: {}, epg: null, movieProviders: {}, appConfig: {} };
 let dbMtime = 0;
+function getAppConfig() {
+  const cfg = (db && db.appConfig && typeof db.appConfig === 'object') ? db.appConfig : {};
+  return {
+    movieEnabled: cfg.movieEnabled !== false,
+    movieEngine: cfg.movieEngine === 'klikxxi' ? 'klikxxi' : 'moviebox',
+    movieMirror: db.movieMirror || 'https://klikxxi.shop',
+    watermarkLogo: typeof cfg.watermarkLogo === 'string' ? cfg.watermarkLogo : '',
+    watermarkText: typeof cfg.watermarkText === 'string' && cfg.watermarkText.trim() ? cfg.watermarkText.trim().slice(0, 28) : 'ZanTV'
+  };
+}
+function syncMovieProviderConfig() {
+  if (!movieProvider) return;
+  const cfg = getAppConfig();
+  if (typeof movieProvider.setActiveEngine === 'function') {
+    movieProvider.setActiveEngine(cfg.movieEngine);
+  }
+  if (typeof movieProvider.setActiveMirror === 'function') {
+    movieProvider.setActiveMirror(cfg.movieMirror);
+  }
+}
 function load() {
   try {
     const st = fs.statSync(DB_FILE);
     if (st.mtimeMs === dbMtime) return;
-    db = Object.assign({ users: {}, sessions: {}, playlists: [], blocked: {}, epg: null, movieProviders: {} }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+    db = Object.assign({ users: {}, sessions: {}, playlists: [], blocked: {}, epg: null, movieProviders: {}, appConfig: {} }, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
     dbMtime = st.mtimeMs;
+    syncMovieProviderConfig();
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
 }
 function save() {
@@ -82,13 +103,11 @@ function save() {
   dbMtime = fs.statSync(DB_FILE).mtimeMs;
 }
 load();
-if (db.movieMirror && movieProvider && typeof movieProvider.setActiveMirror === 'function') {
-  if (db.movieMirror.includes('ngefilm') || db.movieMirror.includes('idmxl')) {
-    db.movieMirror = 'https://klikxxi.shop';
-    save();
-  }
-  movieProvider.setActiveMirror(db.movieMirror);
+if (db.movieMirror && (db.movieMirror.includes('ngefilm') || db.movieMirror.includes('idmxl'))) {
+  db.movieMirror = 'https://klikxxi.shop';
+  save();
 }
+syncMovieProviderConfig();
 
 /* ---------------- kata sandi & sesi ---------------- */
 function hashPassword(pw, salt) {
@@ -864,9 +883,38 @@ const publicUser = (name, myGps) => {
     myGps: myGps || null,
     gpsAutoBind: !!u.gpsAutoBind,
     gpsRadius: u.gpsRadius || 2000,
-    hasFfmpeg: HAS_FFMPEG
+    hasFfmpeg: HAS_FFMPEG,
+    appConfig: getAppConfig()
   };
 };
+
+function parseSrtTimeSec(str) {
+  const m = /(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})/.exec(String(str || '').trim());
+  if (!m) return 0;
+  return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+(m[4].padEnd(3, '0'))) / 1000;
+}
+
+function parseSrtToCues(srtText) {
+  const blocks = String(srtText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split(/\n\s*\n/);
+  const cues = [];
+  for (const blk of blocks) {
+    const lines = blk.trim().split('\n');
+    if (lines.length < 2) continue;
+    let timeIdx = 0;
+    if (!lines[0].includes('-->') && lines[1] && lines[1].includes('-->')) timeIdx = 1;
+    const tLine = lines[timeIdx];
+    if (!tLine || !tLine.includes('-->')) continue;
+    const parts = tLine.split('-->');
+    const start = parseSrtTimeSec(parts[0]);
+    const end = parseSrtTimeSec(parts[1]);
+    const text = lines.slice(timeIdx + 1).join(' ').replace(/<[^>]+>/g, '').replace(/\{[^}]+\}/g, '').trim();
+    if (text && end > start) {
+      cues.push({ start: +start.toFixed(2), end: +end.toFixed(2), text });
+    }
+  }
+  return cues;
+}
+
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const activeStreamLocks = new Map();
 const activeMovieExtractions = new Map();
@@ -892,6 +940,10 @@ async function handle(req, res) {
   if (!p.startsWith('/api/')) throw fail(404, 'Tidak ditemukan');
   // perlindungan CSRF: permintaan yang mengubah data wajib membawa header khusus
   if (method !== 'GET' && req.headers['x-zantv'] !== '1' && p !== '/api/activity') throw fail(403, 'Permintaan ditolak');
+
+  if (p === '/api/config' && method === 'GET') {
+    return send(res, 200, { ok: true, config: getAppConfig() });
+  }
 
   if (p === '/api/login' && method === 'POST') {
     if (loginBlocked(ip)) throw fail(429, 'Terlalu banyak percobaan. Coba lagi 10 menit lagi.');
@@ -1003,18 +1055,56 @@ async function handle(req, res) {
   }
 
   /* ==========================================================================
-     ZanTV Bioskop / Movie VOD Endpoints (CloudX-V2 Integration) - Public VOD
+     ZanTV Bioskop / Movie VOD Endpoints (Dual-Engine: MovieBox BFF + CloudX)
      ========================================================================== */
   if (p === '/api/movie/categories' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    return send(res, 200, { categories: movieProvider.CATEGORIES });
+    const cfg = getAppConfig();
+    return send(res, 200, { categories: movieProvider.CATEGORIES, movieEnabled: cfg.movieEnabled, engine: cfg.movieEngine });
+  }
+
+  if (p === '/api/movie/subtitle' && method === 'GET') {
+    const subUrl = (url.searchParams.get('u') || url.searchParams.get('url') || '').trim();
+    const fmt = (url.searchParams.get('format') || 'vtt').toLowerCase();
+    if (!subUrl || !/^https?:\/\//i.test(subUrl)) return send(res, 400, { error: 'URL subtitle tidak valid' });
+    const cacheKey = `mov:sub:${fmt}:${subUrl}`;
+    const cached = getVodCache(cacheKey);
+    if (cached) {
+      if (fmt === 'json') return send(res, 200, cached);
+      res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=7200' });
+      return res.end(cached);
+    }
+    try {
+      const targetSub = await assertPublicUrl(subUrl);
+      const sRes = await fetch(targetSub.toString(), {
+        headers: { 'User-Agent': CHROME_UA, 'Referer': 'https://123movienow.cc/' },
+        signal: AbortSignal.timeout(7000)
+      });
+      if (!sRes.ok) throw new Error('HTTP ' + sRes.status);
+      const srtText = await sRes.text();
+      if (fmt === 'json') {
+        const cues = parseSrtToCues(srtText);
+        const payload = { ok: true, count: cues.length, cues };
+        setVodCache(cacheKey, payload, 2 * 3600 * 1000);
+        return send(res, 200, payload);
+      }
+      const vttBody = 'WEBVTT\n\n' + srtText
+        .replace(/\r\n/g, '\n')
+        .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+      setVodCache(cacheKey, vttBody, 2 * 3600 * 1000);
+      res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=7200' });
+      return res.end(vttBody);
+    } catch (err) {
+      return send(res, 502, { error: 'Gagal memuat subtitle: ' + err.message });
+    }
   }
 
   if (p === '/api/movie/list' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const cfg = getAppConfig();
     const cat = (url.searchParams.get('category') || 'terbaru').toLowerCase();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
-    const cacheKey = `mov:cat:${cat}:${page}`;
+    const cacheKey = `mov:cat:${cfg.movieEngine}:${cat}:${page}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
@@ -1029,10 +1119,11 @@ async function handle(req, res) {
 
   if (p === '/api/movie/search' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
+    const cfg = getAppConfig();
     const q = (url.searchParams.get('q') || '').trim();
     const page = Math.max(1, +(url.searchParams.get('page') || 1));
     if (!q) return send(res, 200, { query: '', page: 1, items: [] });
-    const cacheKey = `mov:search:${q}:${page}`;
+    const cacheKey = `mov:search:${cfg.movieEngine}:${q}:${page}`;
     const cached = getVodCache(cacheKey);
     if (cached) return send(res, 200, cached);
 
@@ -1065,7 +1156,7 @@ async function handle(req, res) {
   if (p === '/api/movie/stream' && method === 'GET') {
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
     const itemUrl = (url.searchParams.get('url') || url.searchParams.get('id') || '').trim();
-    const tab = (url.searchParams.get('tab') || 'p3').trim();
+    const tab = (url.searchParams.get('tab') || '1080').trim();
     if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
     const cacheKey = `mov:stream:${itemUrl}:${tab}`;
     const cached = getVodCache(cacheKey);
@@ -1093,32 +1184,75 @@ async function handle(req, res) {
   const admin = me && me.role === 'admin';
   const needAdmin = () => { if (!admin) throw fail(403, 'Hanya admin yang boleh melakukan ini'); };
 
-  /* Status & kelola mirror provider film (Admin Only) */
+  /* Status & kelola provider Bioskop 21 + Custom Watermark Logo (Admin Only) */
   if (p === '/api/movie/admin/mirror' && method === 'GET') {
     needAdmin();
     if (!movieProvider) return send(res, 503, { error: 'Movie provider not available' });
-    const info = movieProvider.getMirrors ? movieProvider.getMirrors() : { active: 'https://klikxxi.shop', mirrors: ['https://klikxxi.shop'] };
+    const info = movieProvider.getMirrors ? movieProvider.getMirrors() : { active: 'https://klikxxi.shop', engine: 'moviebox', mirrors: ['https://klikxxi.shop'] };
+    const cfg = getAppConfig();
     return send(res, 200, {
       ok: true,
       active: info.active,
-      mirrors: info.mirrors
+      engine: cfg.movieEngine,
+      mirrors: info.mirrors,
+      movieEnabled: cfg.movieEnabled,
+      watermarkLogo: cfg.watermarkLogo,
+      watermarkText: cfg.watermarkText
     });
   }
 
-  if (p === '/api/movie/admin/mirror' && method === 'POST') {
+  if ((p === '/api/movie/admin/mirror' || p === '/api/admin/config') && method === 'POST') {
     needAdmin();
-    const b = await readBody(req, 4096);
-    const newUrl = String(b.url || '').trim();
-    if (!newUrl || !/^https?:\/\//i.test(newUrl)) {
-      throw fail(400, 'Alamat URL mirror harus diawali http:// atau https://');
+    const b = await readBody(req, 1024 * 1024); // support base64 logo upload up to 1MB
+    if (!db.appConfig || typeof db.appConfig !== 'object') db.appConfig = {};
+
+    if (typeof b.movieEnabled === 'boolean') {
+      db.appConfig.movieEnabled = b.movieEnabled;
     }
-    if (!movieProvider) throw fail(503, 'Movie provider not available');
-    const updated = movieProvider.setActiveMirror(newUrl);
-    db.movieMirror = updated;
+    if (b.engine === 'moviebox' || b.engine === 'klikxxi') {
+      db.appConfig.movieEngine = b.engine;
+      if (movieProvider && typeof movieProvider.setActiveEngine === 'function') {
+        movieProvider.setActiveEngine(b.engine);
+      }
+    }
+    if (typeof b.url === 'string' && b.url.trim()) {
+      const newUrl = b.url.trim();
+      if (newUrl === 'moviebox' || newUrl === 'klikxxi') {
+        db.appConfig.movieEngine = newUrl;
+        if (movieProvider && typeof movieProvider.setActiveEngine === 'function') {
+          movieProvider.setActiveEngine(newUrl);
+        }
+      } else if (/^https?:\/\//i.test(newUrl)) {
+        const updated = movieProvider ? movieProvider.setActiveMirror(newUrl) : newUrl;
+        db.movieMirror = updated;
+      }
+    }
+    if (typeof b.watermarkLogo === 'string') {
+      const logoVal = b.watermarkLogo.trim();
+      if (!logoVal || /^https?:\/\//i.test(logoVal) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(logoVal) || logoVal.startsWith('icons/')) {
+        db.appConfig.watermarkLogo = logoVal;
+      } else {
+        throw fail(400, 'Format logo harus berupa URL gambar (https://...) atau unggahan gambar');
+      }
+    }
+    if (typeof b.watermarkText === 'string') {
+      db.appConfig.watermarkText = b.watermarkText.trim().slice(0, 28) || 'ZanTV';
+    }
+
     save();
+    syncMovieProviderConfig();
     vodCache.clear();
-    console.log('[ZanTV] Movie mirror updated by admin:', updated);
-    return send(res, 200, { ok: true, active: updated });
+    const cfg = getAppConfig();
+    console.log('[ZanTV] App/Movie config updated by admin:', { engine: cfg.movieEngine, movieEnabled: cfg.movieEnabled, mirror: cfg.movieMirror, hasCustomLogo: !!cfg.watermarkLogo });
+    return send(res, 200, {
+      ok: true,
+      active: cfg.movieMirror,
+      engine: cfg.movieEngine,
+      movieEnabled: cfg.movieEnabled,
+      watermarkLogo: cfg.watermarkLogo,
+      watermarkText: cfg.watermarkText,
+      config: cfg
+    });
   }
 
   if (p === '/api/logout' && method === 'POST') {
@@ -2088,6 +2222,8 @@ async function handle(req, res) {
     if (cl) outHeaders['Content-Length'] = cl;
     const cr = upRes.headers.get('content-range');
     if (cr) outHeaders['Content-Range'] = cr;
+    const ar = upRes.headers.get('accept-ranges');
+    if (ar) outHeaders['Accept-Ranges'] = ar;
     res.writeHead(upRes.status, outHeaders);
     if (!upRes.body) return res.end();
     pipeStream = Readable.fromWeb(upRes.body);

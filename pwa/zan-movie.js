@@ -1,6 +1,6 @@
-/* ZanTV Bioskop 21 & Movie VOD Explorer v1.7.26
- * Integrasi Provider Streaming Film Indonesia (CloudX-V2 Scraper & Extractor)
- * Fitur: Koleksi Film Bioskop 2026, Series, Server Switcher, Full 16:9 Landscape Player
+/* ZanTV Bioskop 21 & Movie VOD Explorer v2.0 (Argon Cinema Edition)
+ * Dual-Engine: MovieBox Official BFF API (Direct CDN 1080p/720p + Sub Indo) + KlikXXI CloudX Turbo
+ * Fitur: Admin Bioskop Toggle (ON/OFF), Custom Watermark Logo & Brand Layar, Auto Subtitle Indonesia
  * Desain iOS Glassmorphism Premium & Micro-animations
  * Crafted with love by Lody for ZanTV.
  */
@@ -9,8 +9,10 @@
 
   var CATEGORIES = [
     { id: 'terbaru', label: '🆕 Terbaru 2026' },
+    { id: 'indo', label: '🇮🇩 Film & Series Indo' },
     { id: 'populer', label: '🔥 Populer 2025' },
     { id: 'series', label: '📺 TV Series' },
+    { id: 'kdrama', label: '🇰🇷 K-Drama' },
     { id: 'action', label: '💥 Action' },
     { id: 'horror', label: '👻 Horror' },
     { id: 'comedy', label: '😂 Komedi' },
@@ -30,8 +32,16 @@
     movies: [],
     currentMovie: null,
     currentDetail: null,
-    selectedServer: 'p3', // Default p3 (VOE Embed stream)
-    selectedEpisode: null
+    selectedServer: '1080',
+    selectedEpisode: null,
+    selectedEpisodeIdx: 0,
+    appConfig: {
+      movieEnabled: true,
+      movieEngine: 'moviebox',
+      movieMirror: 'https://klikxxi.shop',
+      watermarkLogo: '',
+      watermarkText: 'ZanTV'
+    }
   };
 
   var el = {};
@@ -76,7 +86,7 @@
     var qs = new URLSearchParams(params || {}).toString();
     var url = '/api/movie/' + endpoint + (qs ? '?' + qs : '');
     var ac = new AbortController();
-    var timer = setTimeout(function () { ac.abort(); }, 8000);
+    var timer = setTimeout(function () { ac.abort(); }, 18000);
     try {
       var res = await fetch(url, {
         headers: { 'Accept': 'application/json' },
@@ -96,7 +106,7 @@
   async function apiPost(endpoint, body) {
     var url = '/api/movie/' + endpoint;
     var ac = new AbortController();
-    var timer = setTimeout(function () { ac.abort(); }, 8000);
+    var timer = setTimeout(function () { ac.abort(); }, 18000);
     try {
       var res = await fetch(url, {
         method: 'POST',
@@ -113,6 +123,57 @@
       clearTimeout(timer);
       throw e;
     }
+  }
+
+  /* ---------------- GLOBAL CONFIG: WATERMARK & BIOSKOP TOGGLE ---------------- */
+  function formatBrandHtml(txt) {
+    var clean = String(txt || 'ZanTV').trim() || 'ZanTV';
+    if (/tv$/i.test(clean) && clean.length > 2) {
+      return escapeHtml(clean.slice(0, -2)) + '<b>' + escapeHtml(clean.slice(-2)) + '</b>';
+    }
+    return '<b>' + escapeHtml(clean) + '</b>';
+  }
+
+  function applyAppConfig(cfg) {
+    if (!cfg || typeof cfg !== 'object') return;
+    M.appConfig = Object.assign({}, M.appConfig, cfg);
+
+    // 1. Update Watermark Logo & Brand Text di layar player
+    var wmBox = document.getElementById('stageWatermark');
+    if (wmBox) {
+      var wmImg = wmBox.querySelector('.wm-icon');
+      var wmBrand = wmBox.querySelector('.wm-brand');
+      var logoSrc = (cfg.watermarkLogo && String(cfg.watermarkLogo).trim()) ? String(cfg.watermarkLogo).trim() : 'icons/icon-192.png';
+      if (wmImg) {
+        wmImg.src = logoSrc;
+        wmImg.onerror = function () { this.src = 'icons/icon-192.png'; };
+      }
+      if (wmBrand) {
+        wmBrand.innerHTML = formatBrandHtml(cfg.watermarkText || 'ZanTV');
+      }
+    }
+
+    // 2. Toggle Aktif / Nonaktif Tab Bioskop 21
+    var segMovieBtn = document.getElementById('segMovieBtn');
+    var enabled = cfg.movieEnabled !== false;
+    if (segMovieBtn) {
+      segMovieBtn.hidden = !enabled;
+      segMovieBtn.style.display = enabled ? '' : 'none';
+      if (!enabled && document.body.classList.contains('is-movie-mode')) {
+        var segLiveBtn = document.getElementById('segLiveBtn');
+        if (segLiveBtn) segLiveBtn.click();
+      }
+    }
+  }
+
+  async function syncGlobalConfig() {
+    try {
+      var res = await fetch('/api/config', { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
+      if (res.ok) {
+        var data = await res.json();
+        if (data && data.config) applyAppConfig(data.config);
+      }
+    } catch (e) {}
   }
 
   /* ---------------- NOTIFIKASI TOAST ---------------- */
@@ -185,7 +246,7 @@
         var emptyText = el.movieEmpty.querySelector('.movie-empty-text');
         if (emptyText) {
           emptyText.textContent = (res === null)
-            ? 'Koneksi ke server film sedang sibuk atau timeout. Silakan klik tombol kategori di atas untuk coba lagi.'
+            ? 'Koneksi ke server film sedang sibuk. Silakan klik kategori lain atau coba lagi.'
             : 'Tidak ada film ditemukan.';
         }
       }
@@ -194,7 +255,7 @@
     }
 
     if (el.movieEmpty) el.movieEmpty.hidden = true;
-    M.hasMore = items.length >= 20;
+    M.hasMore = items.length >= 16;
     if (el.movieLoadMoreWrap) el.movieLoadMoreWrap.hidden = !M.hasMore;
 
     renderMovieCards(items, append);
@@ -237,22 +298,25 @@
     if (!item) return;
     M.currentMovie = item;
     M.currentDetail = null;
-    M.selectedServer = 'p3'; // default p3 VOE
+    var isMb = String(item.url || '').indexOf('mb://') === 0 || item.provider === 'moviebox';
+    M.selectedServer = isMb ? '1080' : 'p3';
     M.selectedEpisode = null;
+    M.selectedEpisodeIdx = 0;
 
-    // Tampilkan data awal seketika
     if (el.movieSheetCover) el.movieSheetCover.src = item.poster || 'icons/icon-192.png';
     if (el.movieSheetTitle) el.movieSheetTitle.textContent = item.title || 'Film Bioskop';
     if (el.movieSheetRating) {
       el.movieSheetRating.textContent = item.rating || '⭐ 8.0';
       el.movieSheetRating.hidden = !item.rating;
     }
-    if (el.movieSheetQuality) el.movieSheetQuality.textContent = item.quality || 'HD';
+    if (el.movieSheetQuality) el.movieSheetQuality.textContent = item.quality || 'FHD 1080p';
     if (el.movieSheetBadge) el.movieSheetBadge.textContent = item.isSeries ? 'TV SERIES' : 'BIOSKOP 21';
     if (el.movieSheetMeta) el.movieSheetMeta.innerHTML = '<span>Memuat informasi lengkap...</span>';
-    if (el.movieSheetDesc) el.movieSheetDesc.textContent = 'Mengambil sinopsis dan server streaming...';
+    if (el.movieSheetDesc) el.movieSheetDesc.textContent = 'Mengambil sinopsis dan daftar kualitas server...';
     if (el.movieEpSection) el.movieEpSection.hidden = true;
-    if (el.movieSheetServers) el.movieSheetServers.innerHTML = '<span class="movie-server-btn is-active">Server 3 (VOE)</span>';
+    if (el.movieSheetServers) {
+      el.movieSheetServers.innerHTML = '<span class="movie-server-btn is-active">' + (isMb ? '🚀 Server 1080p (Full HD)' : '🚀 Server 3 (VOE Clean)') + '</span>';
+    }
     if (el.movieSheetPlayBtn) {
       el.movieSheetPlayBtn.disabled = true;
       el.movieSheetPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg><span>Menyiapkan...</span>';
@@ -266,26 +330,27 @@
       }
     }
 
-    // Ambil detail lengkap dari backend ZanTV
     var detail = await apiGet('detail', { url: item.url });
     if (!detail) {
-      if (el.movieSheetDesc) el.movieSheetDesc.textContent = 'Gagal memuat detail film. Silakan coba lagi.';
+      if (el.movieSheetDesc) el.movieSheetDesc.textContent = 'Siap diputar langsung. Klik tombol Putar di bawah.';
       if (el.movieSheetPlayBtn) {
         el.movieSheetPlayBtn.disabled = false;
-        el.movieSheetPlayBtn.innerHTML = '<span>Coba Putar Langsung</span>';
+        el.movieSheetPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M7 5v14l12-7z"/></svg><span>Putar Sekarang</span>';
       }
       return;
     }
 
     M.currentDetail = detail;
 
-    // Update banner & teks
     if (el.movieSheetCover && detail.poster) el.movieSheetCover.src = detail.poster;
     if (el.movieSheetTitle) el.movieSheetTitle.textContent = detail.title;
     if (el.movieSheetDesc) el.movieSheetDesc.textContent = detail.synopsis || 'Sinopsis belum tersedia untuk judul ini.';
     if (el.movieSheetQuality) el.movieSheetQuality.textContent = detail.quality || 'HD';
+    if (detail.rating && el.movieSheetRating) {
+      el.movieSheetRating.textContent = detail.rating;
+      el.movieSheetRating.hidden = false;
+    }
 
-    // Metadata bar (Genre, Tahun, Durasi, Sutradara)
     var metaParts = [];
     if (detail.genres) metaParts.push('<span>' + escapeHtml(detail.genres) + '</span>');
     if (detail.year) metaParts.push('<span>📅 ' + escapeHtml(detail.year) + '</span>');
@@ -293,20 +358,11 @@
     if (detail.director) metaParts.push('<span>🎬 ' + escapeHtml(detail.director) + '</span>');
     if (el.movieSheetMeta) el.movieSheetMeta.innerHTML = metaParts.join('<span style="opacity:0.4">•</span>') || '<span>Koleksi Bioskop 21</span>';
 
-    // Render Server Tabs (Prioritaskan Server 3 VOE yang bersih direct HLS)
-    var rawServers = detail.servers || [{ id: 'p3', name: 'Server 3' }, { id: 'p1', name: 'Server 1' }];
+    var rawServers = detail.servers || (isMb
+      ? [{ id: '1080', name: '🚀 Server 1080p (Full HD)' }, { id: '720', name: '⚡ Server 720p (HD)' }, { id: '480', name: '📱 Server 480p' }]
+      : [{ id: 'p3', name: '🚀 Server 3 (VOE Clean)' }, { id: 'p1', name: 'Server 1' }]);
     var servers = rawServers.slice();
-    servers.sort(function (a, b) {
-      if (a.id === 'p3') return -1;
-      if (b.id === 'p3') return 1;
-      return 0;
-    });
-    servers.forEach(function (s) {
-      if (s.id === 'p3') s.name = 'Server 3 (HD Bersih)';
-      else if (s.name.indexOf('Cadangan') === -1) s.name = s.name.replace('Server', 'Cadangan');
-    });
-    var hasP3 = servers.some(function (s) { return s.id === 'p3'; });
-    M.selectedServer = hasP3 ? 'p3' : (servers[0] ? servers[0].id : 'p1');
+    M.selectedServer = servers[0] ? servers[0].id : (isMb ? '1080' : 'p3');
 
     if (el.movieSheetServers) {
       el.movieSheetServers.innerHTML = servers.map(function (s) {
@@ -315,11 +371,11 @@
       }).join('');
     }
 
-    // Series Episode list
     if (detail.isSeries && detail.episodes && detail.episodes.length) {
       if (el.movieEpSection) el.movieEpSection.hidden = false;
       if (el.movieEpCount) el.movieEpCount.textContent = detail.episodes.length + ' Episode Tersedia';
       M.selectedEpisode = detail.episodes[0];
+      M.selectedEpisodeIdx = 0;
 
       if (el.movieEpList) {
         el.movieEpList.innerHTML = detail.episodes.map(function (ep, idx) {
@@ -357,7 +413,7 @@
 
     if (M.currentDetail && M.currentDetail.isSeries && M.selectedEpisode) {
       targetUrl = M.selectedEpisode.url;
-      playTitle = (M.currentDetail.title || 'Series') + ' - ' + (M.selectedEpisode.title || 'Episode');
+      playTitle = (M.currentDetail.title || 'Series') + ' · ' + (M.selectedEpisode.title || 'Episode');
     } else if (M.currentDetail && M.currentDetail.url) {
       targetUrl = M.currentDetail.url;
       playTitle = M.currentDetail.title;
@@ -376,15 +432,12 @@
       el.movieSheetPlayBtn.innerHTML = '<span>Menyiapkan Stream...</span>';
     }
 
-    showToast('🍿 Mengambil jalur stream ' + playTitle + '...');
+    showToast('🍿 Menyiapkan ' + playTitle + '...');
 
-    // Ambil stream dari backend ZanTV
     var streamRes = await apiGet('stream', { url: targetUrl, tab: M.selectedServer });
 
-    // Fallback jika tab pilihan pertama gagal, coba server lain
     if (!streamRes || !streamRes.streamUrl) {
-      var altTab = (M.selectedServer === 'p3') ? 'p1' : 'p3';
-      showToast('Mengalihkan ke server cadangan (' + altTab.toUpperCase() + ')...');
+      var altTab = (M.selectedServer === '1080') ? '720' : ((M.selectedServer === 'p3') ? 'p1' : '1080');
       streamRes = await apiGet('stream', { url: targetUrl, tab: altTab });
     }
 
@@ -398,17 +451,20 @@
       return;
     }
 
-    if (streamRes.kind === 'iframe' || (!streamRes.streamUrl.includes('.m3u8') && !streamRes.streamUrl.includes('cloudwindow') && streamRes.kind !== 'hls')) {
-      showToast('⚠️ Server ini hanya menyediakan web player pihak ketiga dengan iklan. Silakan gunakan Server 3 (HD Bersih).');
+    if (streamRes.kind === 'iframe') {
+      showToast('⚠️ Server ini hanya menyediakan web player pihak ketiga dengan iklan. Silakan gunakan Server utama.');
       return;
     }
 
-    // Bangun channel payload untuk player ZanTV
     var poster = (M.currentDetail && M.currentDetail.poster) || (M.currentMovie && M.currentMovie.poster) || 'icons/icon-192.png';
     var h = streamRes.headers || {};
-    var streamRef = h.Referer || h.referer || streamRes.referer || 'https://klikxxi.shop/';
-    var streamOrigin = h.Origin || h.origin || streamRes.origin || 'https://klikxxi.shop';
+    var streamRef = h.Referer || h.referer || streamRes.referer || 'https://123movienow.cc/';
+    var streamOrigin = h.Origin || h.origin || streamRes.origin || 'https://123movienow.cc';
     var streamUa = h['User-Agent'] || h.ua || streamRes.ua || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    var isHlsStream = (streamRes.kind === 'hls' || streamRes.type === 'hls' || streamRes.streamUrl.indexOf('.m3u8') !== -1);
+
+    var epList = (M.currentDetail && M.currentDetail.episodes) || [];
+    var hasNextEp = epList.length > 0 && M.selectedEpisodeIdx + 1 < epList.length;
 
     var vodCh = {
       name: playTitle,
@@ -417,41 +473,54 @@
       group: 'Bioskop 21',
       isVod: true,
       isMovie: true,
-      isVertical: false, // 16:9 Landscape widescreen standard cinema
+      isVertical: false,
       ref: streamRef,
       ua: streamUa,
       origin: streamOrigin,
-      servers: (M.currentDetail && M.currentDetail.servers) || [{ id: 'p3', name: 'Server 3' }, { id: 'p1', name: 'Server 1' }],
+      subtitles: streamRes.subtitles || [],
+      qualities: streamRes.qualities || [],
+      hasNextEpisode: hasNextEp,
+      nextEpisodeTitle: hasNextEp ? (epList[M.selectedEpisodeIdx + 1].title || ('Episode ' + (M.selectedEpisodeIdx + 2))) : '',
+      servers: (M.currentDetail && M.currentDetail.servers) || [{ id: '1080', name: 'Server 1080p' }, { id: '720', name: 'Server 720p' }],
       activeServer: M.selectedServer,
-      activeServerName: 'Server ' + (streamRes.server || M.selectedServer).toUpperCase(),
+      activeServerName: streamRes.server ? ('Server ' + streamRes.server) : ('Server ' + String(M.selectedServer).toUpperCase()),
       sources: [
         {
           url: streamRes.streamUrl,
-          name: 'Server ' + (streamRes.server || M.selectedServer).toUpperCase(),
+          name: streamRes.server ? ('Server ' + streamRes.server) : ('Server ' + String(M.selectedServer).toUpperCase()),
           ref: streamRef,
           origin: streamOrigin,
           ua: streamUa,
-          isHls: (streamRes.kind === 'hls' || streamRes.type === 'hls' || streamRes.streamUrl.indexOf('.m3u8') !== -1)
+          isHls: isHlsStream
         }
       ]
     };
 
     closeMovieSheet();
 
-    // Trigger pemutaran di stage player ZanTV
     if (window.ZanTV && typeof window.ZanTV.playVod === 'function') {
       window.ZanTV.playVod(vodCh);
     } else if (typeof window.playChannel === 'function') {
       window.playChannel(vodCh);
     }
 
-    // Pada mobile, scroll ke stage agar video langsung terlihat
     if (window.innerWidth <= 860) {
       var stage = document.getElementById('stage');
       if (stage) stage.scrollIntoView({ behavior: 'smooth' });
     }
 
-    showToast('▶️ Memutar: ' + playTitle);
+    var subNotice = (streamRes.subtitles && streamRes.subtitles.length) ? ' · 🇮🇩 Sub Indo Aktif' : '';
+    showToast('▶️ Memutar: ' + playTitle + subNotice);
+  }
+
+  function playNextEpisode() {
+    if (!M.currentDetail || !M.currentDetail.episodes) return;
+    var nextIdx = M.selectedEpisodeIdx + 1;
+    if (nextIdx < M.currentDetail.episodes.length) {
+      M.selectedEpisodeIdx = nextIdx;
+      M.selectedEpisode = M.currentDetail.episodes[nextIdx];
+      playCurrentSelection();
+    }
   }
 
   /* ---------------- SEARCH DEBOUNCE ---------------- */
@@ -463,12 +532,14 @@
 
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(function () {
+      if (val === M.query) return;
       M.query = val;
       M.page = 1;
       loadMovies(false);
     }, 450);
   }
 
+  /* ---------------- HELPERS ---------------- */
   function escapeHtml(str) {
     return String(str || '')
       .replace(/&/g, '&amp;')
@@ -478,35 +549,75 @@
       .replace(/'/g, '&#39;');
   }
 
-  /* ---------------- EVENT LISTENERS & INIT ---------------- */
+  /* Compress image file to crisp Data URI for Watermark Logo */
+  function compressLogoFile(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('Gagal membaca file gambar')); };
+      reader.onload = function (ev) {
+        var dataUrl = String(ev.target.result || '');
+        if (file.type === 'image/svg+xml' && dataUrl.length < 250000) {
+          return resolve(dataUrl);
+        }
+        var img = new Image();
+        img.onerror = function () { reject(new Error('File bukan gambar yang valid')); };
+        img.onload = function () {
+          var maxDim = 160;
+          var w = img.width || 128;
+          var h = img.height || 128;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+            else { w = Math.round((w * maxDim) / h); h = maxDim; }
+          }
+          var canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /* ---------------- INIT & EVENT LISTENERS ---------------- */
   function init() {
     initElements();
+    syncGlobalConfig();
+    if (!el.moviePane) return;
+
     renderCategoryChips();
 
-    // Klik Kategori Chip
     if (el.movieCatChips) {
       el.movieCatChips.addEventListener('click', function (e) {
-        var chip = e.target.closest('.movie-cat-chip');
-        if (!chip) return;
-        var cat = chip.getAttribute('data-cat');
-        if (!cat || cat === M.category) return;
+        var btn = e.target.closest('.movie-cat-chip');
+        if (!btn) return;
+        var cat = btn.getAttribute('data-cat');
+        if (!cat || (cat === M.category && !M.query && M.movies.length > 0)) return;
+
         M.category = cat;
-        renderCategoryChips();
         M.page = 1;
         M.query = '';
         if (el.movieSearchInput) el.movieSearchInput.value = '';
         if (el.movieSearchClear) el.movieSearchClear.hidden = true;
+
+        renderCategoryChips();
         loadMovies(false);
       });
     }
 
-    // Search Input
     if (el.movieSearchInput) {
       el.movieSearchInput.addEventListener('input', handleSearchInput);
       el.movieSearchInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
           e.preventDefault();
-          handleSearchInput();
+          clearTimeout(searchTimeout);
+          M.query = el.movieSearchInput.value.trim();
+          M.page = 1;
+          loadMovies(false);
         }
       });
     }
@@ -521,30 +632,24 @@
       });
     }
 
-    // Load More Button
     if (el.movieLoadMoreBtn) {
       el.movieLoadMoreBtn.addEventListener('click', function () {
-        M.page++;
+        if (M.loading || !M.hasMore) return;
+        M.page += 1;
         loadMovies(true);
       });
     }
 
-    // Klik Kartu Film di Grid
     if (el.movieGrid) {
       el.movieGrid.addEventListener('click', function (e) {
         var card = e.target.closest('.movie-card');
         if (!card) return;
-        var itemUrl = card.getAttribute('data-url');
-        var found = M.movies.find(function (x) { return x.url === itemUrl; });
-        if (found) {
-          openMovieDetail(found);
-        } else {
-          openMovieDetail({ url: itemUrl, title: card.querySelector('.movie-card-title').textContent });
-        }
+        var url = card.getAttribute('data-url');
+        var found = M.movies.find(function (m) { return m.url === url; });
+        if (found) openMovieDetail(found);
       });
     }
 
-    // Modal Sheet Server Tabs
     if (el.movieSheetServers) {
       el.movieSheetServers.addEventListener('click', function (e) {
         var btn = e.target.closest('.movie-server-btn');
@@ -557,13 +662,13 @@
       });
     }
 
-    // Modal Sheet Episode List
     if (el.movieEpList) {
       el.movieEpList.addEventListener('click', function (e) {
         var btn = e.target.closest('.movie-ep-btn');
         if (!btn) return;
         var idx = +btn.getAttribute('data-idx');
         if (isNaN(idx) || !M.currentDetail || !M.currentDetail.episodes) return;
+        M.selectedEpisodeIdx = idx;
         M.selectedEpisode = M.currentDetail.episodes[idx];
         var all = el.movieEpList.querySelectorAll('.movie-ep-btn');
         all.forEach(function (b) { b.classList.toggle('is-active', b === btn); });
@@ -573,12 +678,10 @@
       });
     }
 
-    // Play Button di Sheet
     if (el.movieSheetPlayBtn) {
       el.movieSheetPlayBtn.addEventListener('click', playCurrentSelection);
     }
 
-    // Close Sheet
     if (el.movieSheetClose) {
       el.movieSheetClose.addEventListener('click', closeMovieSheet);
     }
@@ -588,7 +691,6 @@
       });
     }
 
-    // Admin Button di Movie Topbar & Dialog Akun
     if (el.movieAdminBtn) {
       el.movieAdminBtn.addEventListener('click', openMovieAdminDialog);
     }
@@ -603,12 +705,12 @@
     }
   }
 
-  /* ---------------- ADMIN: KELOLA MIRROR PROVIDER ---------------- */
+  /* ---------------- ADMIN: KELOLA BIOSKOP 21, ENGINE & WATERMARK LOGO ---------------- */
   async function openMovieAdminDialog() {
     if (!el.movieAdminDialog) return;
 
     if (el.movieAdminList) {
-      el.movieAdminList.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted)">Memuat status mirror...</div>';
+      el.movieAdminList.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted)">Memuat pengaturan Admin...</div>';
     }
 
     if (typeof el.movieAdminDialog.showModal === 'function') {
@@ -619,21 +721,28 @@
 
     try {
       var info = await apiGet('admin/mirror');
-      if (!info || !info.ok) throw new Error((info && info.error) || 'Gagal mengambil data mirror');
-      renderAdminMirrorUI(info.active, info.mirrors || []);
+      if (!info || !info.ok) throw new Error((info && info.error) || 'Gagal mengambil data konfigurasi');
+      renderAdminMirrorUI(info);
     } catch (err) {
       if (el.movieAdminList) {
-        el.movieAdminList.innerHTML = '<div style="padding:16px;text-align:center;color:#ef4444">⚠️ ' + escapeHtml(err.message || 'Gagal memuat status mirror') + '</div>';
+        el.movieAdminList.innerHTML = '<div style="padding:18px;text-align:center;color:#ef4444">⚠️ ' + escapeHtml(err.message || 'Gagal memuat panel Admin') + '</div>';
       }
     }
   }
 
-  function renderAdminMirrorUI(activeUrl, mirrors) {
+  function renderAdminMirrorUI(info) {
     if (!el.movieAdminList) return;
-    activeUrl = activeUrl || 'https://klikxxi.shop';
+    info = info || {};
+    var activeUrl = info.active || 'https://klikxxi.shop';
+    var activeEngine = info.engine || 'moviebox';
+    var movieEnabled = info.movieEnabled !== false;
+    var wmLogo = info.watermarkLogo || '';
+    var wmText = info.watermarkText || 'ZanTV';
+    var previewLogo = wmLogo || 'icons/icon-192.png';
+
     var verified = ['https://klikxxi.shop', 'https://filmlokal.me', 'https://ww11.pencurimovie.sbs'];
-    if (mirrors && mirrors.length) {
-      mirrors.forEach(function (m) {
+    if (info.mirrors && info.mirrors.length) {
+      info.mirrors.forEach(function (m) {
         if (!m.includes('ngefilm') && !m.includes('idmxl') && verified.indexOf(m) === -1) {
           verified.push(m);
         }
@@ -644,35 +753,208 @@
     var chipsHtml = verified.map(function (m) {
       var isCur = m === activeUrl;
       return '<button type="button" class="movie-mirror-chip' + (isCur ? ' is-active' : '') + '" data-mirror="' + escapeHtml(m) + '">' +
-        (isCur ? '✓ ' : '') + escapeHtml(m.replace(/^https?:\/\//, '')) + ' (HLS Clean)' +
+        (isCur ? '✓ ' : '') + escapeHtml(m.replace(/^https?:\/\//, '')) +
       '</button>';
     }).join('');
 
     el.movieAdminList.innerHTML =
+      /* 1. KARTU TOGGLE AKTIF / NONAKTIF BIOSKOP 21 */
+      '<div class="movie-admin-item" style="margin-bottom:12px;">' +
+        '<div class="movie-admin-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">' +
+          '<div class="movie-admin-info">' +
+            '<span class="movie-admin-icon">🍿</span>' +
+            '<div class="movie-admin-title-box">' +
+              '<strong class="movie-admin-title">Status Fitur Bioskop 21</strong>' +
+              '<span class="movie-admin-status-pill" style="background:' + (movieEnabled ? 'rgba(16,185,129,0.18);color:#34d399' : 'rgba(239,68,68,0.18);color:#f87171') + '">' +
+                (movieEnabled ? '🟢 AKTIF UNTUK SEMUA USER' : '🔴 DINONAKTIFKAN') +
+              '</span>' +
+            '</div>' +
+          '</div>' +
+          '<button type="button" class="btn ' + (movieEnabled ? 'ghost' : 'primary') + '" id="adminToggleBioskopBtn" style="min-width:130px;justify-content:center;">' +
+            (movieEnabled ? '⏸ Matikan Bioskop' : '▶️ Aktifkan Bioskop') +
+          '</button>' +
+        '</div>' +
+        '<div class="movie-admin-desc">Jika dimatikan, menu tab <b>Bioskop 21</b> akan disembunyikan dari layar utama seluruh pengguna secara instan.</div>' +
+      '</div>' +
+
+      /* 2. KARTU WATERMARK LOGO & BRAND LAYAR */
+      '<div class="movie-admin-item" style="margin-bottom:12px;">' +
+        '<div class="movie-admin-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+          '<div class="movie-admin-info">' +
+            '<span class="movie-admin-icon">✨</span>' +
+            '<div class="movie-admin-title-box">' +
+              '<strong class="movie-admin-title">Custom Logo & Watermark Layar</strong>' +
+              '<span class="movie-admin-status-pill">Tampil di Pojok Kanan Atas Video</span>' +
+            '</div>' +
+          '</div>' +
+          '<div id="adminWmPreview" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:rgba(10,14,24,0.78);border:1px solid rgba(255,255,255,0.16);box-shadow:0 4px 14px rgba(0,0,0,0.4);">' +
+            '<img id="adminWmPreviewImg" src="' + escapeHtml(previewLogo) + '" alt="" width="20" height="20" style="border-radius:5px;object-fit:contain;">' +
+            '<span id="adminWmPreviewText" style="font-size:13px;font-weight:600;color:#fff;letter-spacing:0.3px;">' + formatBrandHtml(wmText) + '</span>' +
+            '<span style="font-size:9px;font-weight:800;padding:2px 5px;border-radius:4px;background:linear-gradient(135deg,#22d3ee,#a855f7);color:#000;">HD</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="movie-admin-desc">Ganti logo dan teks watermark di layar player menggunakan URL gambar atau unggah langsung file logo (PNG/WebP/SVG/JPG) dari perangkatmu.</div>' +
+        '<div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:8px;">' +
+          '<input type="text" class="movie-admin-url-input" id="adminWmLogoInput" value="' + escapeHtml(wmLogo) + '" placeholder="URL Logo (https://...) atau klik Unggah File ➡️" autocomplete="off" spellcheck="false">' +
+          '<label class="btn ghost" style="cursor:pointer;margin:0;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;">' +
+            '<span>📁 Unggah Logo</span>' +
+            '<input type="file" id="adminWmLogoFile" accept="image/*" hidden>' +
+          '</label>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-top:8px;">' +
+          '<input type="text" class="movie-admin-url-input" id="adminWmTextInput" value="' + escapeHtml(wmText) + '" placeholder="Teks Brand (contoh: ZanTV)" maxlength="28">' +
+          '<button type="button" class="btn ghost" id="adminWmResetBtn" title="Kembalikan ke logo bawaan ZanTV">Reset</button>' +
+          '<button type="button" class="btn primary" id="adminWmSaveBtn">💾 Simpan Logo</button>' +
+        '</div>' +
+      '</div>' +
+
+      /* 3. KARTU DUAL-ENGINE PROVIDER BIOSKOP */
       '<div class="movie-admin-item">' +
         '<div class="movie-admin-head">' +
           '<div class="movie-admin-info">' +
-            '<span class="movie-admin-icon">🎬</span>' +
+            '<span class="movie-admin-icon">🚀</span>' +
             '<div class="movie-admin-title-box">' +
-              '<strong class="movie-admin-title">Sumber Bioskop & Series 2026</strong>' +
-              '<span class="movie-admin-status-pill">🟢 Aktif: ' + escapeHtml(activeUrl) + '</span>' +
+              '<strong class="movie-admin-title">Mesin Provider Bioskop & Series</strong>' +
+              '<span class="movie-admin-status-pill">🟢 Mesin Aktif: ' + (activeEngine === 'moviebox' ? 'MovieBox Official CDN (Utama)' : ('KlikXXI (' + escapeHtml(activeUrl) + ')')) + '</span>' +
             '</div>' +
           '</div>' +
         '</div>' +
-        '<div class="movie-admin-desc">Gunakan mirror terverifikasi Direct HLS di bawah ini agar video bebas iklan dan dapat diputar langsung di player ZanTV.</div>' +
-        '<div class="movie-admin-url-box">' +
-          '<span class="movie-admin-url-label">Domain:</span>' +
-          '<input type="url" class="movie-admin-url-input" id="movieMirrorInput" value="' + escapeHtml(activeUrl) + '" placeholder="https://klikxxi.shop" autocomplete="off" spellcheck="false">' +
-          '<button type="button" class="btn primary movie-admin-url-btn" id="movieMirrorSaveBtn">Simpan Link</button>' +
+        '<div class="movie-admin-desc">Pilih mesin utama pengambil katalog & video. <b>MovieBox Official CDN</b> sangat direkomendasikan karena menggunakan JSON API murni (1080p/720p cepat, Subtitle Indonesia otomatis, 0% judol & bebas blokir).</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0;">' +
+          '<button type="button" class="movie-mirror-chip' + (activeEngine === 'moviebox' ? ' is-active' : '') + '" id="engineBtnMoviebox" style="padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:3px;border-radius:12px;">' +
+            '<strong style="font-size:12.5px;">' + (activeEngine === 'moviebox' ? '✓ ' : '') + '⚡ MovieBox Official API</strong>' +
+            '<span style="font-size:10.5px;opacity:0.8;">Direct CDN 1080p · Sub Indo · Anti-Macet</span>' +
+          '</button>' +
+          '<button type="button" class="movie-mirror-chip' + (activeEngine === 'klikxxi' ? ' is-active' : '') + '" id="engineBtnKlikxxi" style="padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:3px;border-radius:12px;">' +
+            '<strong style="font-size:12.5px;">' + (activeEngine === 'klikxxi' ? '✓ ' : '') + '🎞️ KlikXXI CloudX (VOE)</strong>' +
+            '<span style="font-size:10.5px;opacity:0.8;">Scraper WordPress + Mirror Domain</span>' +
+          '</button>' +
         '</div>' +
-        '<div style="margin-top:8px;">' +
-          '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;">Mirror Cadangan Terverifikasi Direct HLS:</div>' +
-          '<div class="movie-mirror-chips" id="movieMirrorChips" style="display:flex;flex-wrap:wrap;gap:6px;">' +
-            chipsHtml +
+        '<div id="klikxxiMirrorBox" style="' + (activeEngine === 'klikxxi' ? '' : 'opacity:0.65;') + 'margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);">' +
+          '<div class="movie-admin-url-box">' +
+            '<span class="movie-admin-url-label">Mirror KlikXXI:</span>' +
+            '<input type="url" class="movie-admin-url-input" id="movieMirrorInput" value="' + escapeHtml(activeUrl) + '" placeholder="https://klikxxi.shop" autocomplete="off" spellcheck="false">' +
+            '<button type="button" class="btn primary movie-admin-url-btn" id="movieMirrorSaveBtn">Simpan Mirror</button>' +
+          '</div>' +
+          '<div style="margin-top:8px;">' +
+            '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;">Mirror Cadangan KlikXXI:</div>' +
+            '<div class="movie-mirror-chips" id="movieMirrorChips" style="display:flex;flex-wrap:wrap;gap:6px;">' +
+              chipsHtml +
+            '</div>' +
           '</div>' +
         '</div>' +
       '</div>';
 
+    // Bind Toggle Bioskop ON/OFF
+    var toggleBioskopBtn = document.getElementById('adminToggleBioskopBtn');
+    if (toggleBioskopBtn) {
+      toggleBioskopBtn.addEventListener('click', async function () {
+        var nextState = !movieEnabled;
+        try {
+          toggleBioskopBtn.disabled = true;
+          toggleBioskopBtn.textContent = 'Menyimpan...';
+          var res = await apiPost('admin/mirror', { movieEnabled: nextState });
+          applyAppConfig(res.config || { movieEnabled: res.movieEnabled });
+          showToast(nextState ? '✅ Fitur Bioskop 21 diaktifkan!' : '⏸ Fitur Bioskop 21 dinonaktifkan.');
+          renderAdminMirrorUI(Object.assign({}, info, res));
+        } catch (err) {
+          toggleBioskopBtn.disabled = false;
+          showToast('❌ Gagal mengubah status Bioskop: ' + (err.message || 'Error'));
+        }
+      });
+    }
+
+    // Bind Watermark Logo Upload, Preview & Save
+    var wmLogoInput = document.getElementById('adminWmLogoInput');
+    var wmLogoFile = document.getElementById('adminWmLogoFile');
+    var wmTextInput = document.getElementById('adminWmTextInput');
+    var wmSaveBtn = document.getElementById('adminWmSaveBtn');
+    var wmResetBtn = document.getElementById('adminWmResetBtn');
+    var wmPrevImg = document.getElementById('adminWmPreviewImg');
+    var wmPrevTxt = document.getElementById('adminWmPreviewText');
+
+    function updateWmPreview() {
+      var lVal = (wmLogoInput && wmLogoInput.value.trim()) || 'icons/icon-192.png';
+      var tVal = (wmTextInput && wmTextInput.value.trim()) || 'ZanTV';
+      if (wmPrevImg) wmPrevImg.src = lVal;
+      if (wmPrevTxt) wmPrevTxt.innerHTML = formatBrandHtml(tVal);
+    }
+
+    if (wmLogoInput) wmLogoInput.addEventListener('input', updateWmPreview);
+    if (wmTextInput) wmTextInput.addEventListener('input', updateWmPreview);
+
+    if (wmLogoFile) {
+      wmLogoFile.addEventListener('change', async function (e) {
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+          showToast('⏳ Memproses logo...');
+          var dataUri = await compressLogoFile(file);
+          if (wmLogoInput) wmLogoInput.value = dataUri;
+          updateWmPreview();
+          showToast('✅ Logo siap disimpan! Klik tombol Simpan Logo.');
+        } catch (err) {
+          showToast('❌ ' + (err.message || 'Gagal memuat gambar'));
+        }
+      });
+    }
+
+    if (wmResetBtn) {
+      wmResetBtn.addEventListener('click', async function () {
+        if (wmLogoInput) wmLogoInput.value = '';
+        if (wmTextInput) wmTextInput.value = 'ZanTV';
+        updateWmPreview();
+        try {
+          var res = await apiPost('admin/mirror', { watermarkLogo: '', watermarkText: 'ZanTV' });
+          applyAppConfig(res.config || { watermarkLogo: '', watermarkText: 'ZanTV' });
+          showToast('🔄 Watermark dikembalikan ke bawaan ZanTV');
+          renderAdminMirrorUI(Object.assign({}, info, res));
+        } catch (err) {
+          showToast('❌ ' + (err.message || 'Gagal mereset watermark'));
+        }
+      });
+    }
+
+    if (wmSaveBtn) {
+      wmSaveBtn.addEventListener('click', async function () {
+        var newLogo = wmLogoInput ? wmLogoInput.value.trim() : '';
+        var newText = wmTextInput ? wmTextInput.value.trim() : 'ZanTV';
+        try {
+          wmSaveBtn.disabled = true;
+          wmSaveBtn.textContent = 'Menyimpan...';
+          var res = await apiPost('admin/mirror', { watermarkLogo: newLogo, watermarkText: newText });
+          applyAppConfig(res.config || { watermarkLogo: res.watermarkLogo, watermarkText: res.watermarkText });
+          showToast('✅ Watermark layar berhasil diperbarui!');
+          renderAdminMirrorUI(Object.assign({}, info, res));
+        } catch (err) {
+          wmSaveBtn.disabled = false;
+          wmSaveBtn.textContent = '💾 Simpan Logo';
+          showToast('❌ Gagal menyimpan logo: ' + (err.message || 'Error'));
+        }
+      });
+    }
+
+    // Bind Engine Switcher (MovieBox vs KlikXXI)
+    var btnMb = document.getElementById('engineBtnMoviebox');
+    var btnKx = document.getElementById('engineBtnKlikxxi');
+
+    async function switchEngineTo(eng) {
+      try {
+        var res = await apiPost('admin/mirror', { engine: eng });
+        applyAppConfig(res.config || { movieEngine: eng });
+        showToast('🚀 Mesin Bioskop 21 dialihkan ke: ' + (eng === 'moviebox' ? 'MovieBox Official CDN' : 'KlikXXI CloudX'));
+        renderAdminMirrorUI(Object.assign({}, info, res));
+        M.page = 1;
+        loadMovies(false);
+      } catch (err) {
+        showToast('❌ Gagal mengganti mesin: ' + (err.message || 'Error'));
+      }
+    }
+
+    if (btnMb) btnMb.addEventListener('click', function () { switchEngineTo('moviebox'); });
+    if (btnKx) btnKx.addEventListener('click', function () { switchEngineTo('klikxxi'); });
+
+    // Bind KlikXXI Mirror Saver
     var saveBtn = document.getElementById('movieMirrorSaveBtn');
     var inputEl = document.getElementById('movieMirrorInput');
     var chipsWrap = document.getElementById('movieMirrorChips');
@@ -698,22 +980,17 @@
           showToast('⚠️ Masukkan alamat lengkap (harus diawali https://)');
           return;
         }
-
         try {
           saveBtn.disabled = true;
           saveBtn.textContent = 'Menyimpan...';
-          var res = await apiPost('admin/mirror', { url: newMirror });
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Tersimpan ✓';
-          setTimeout(function () { saveBtn.textContent = 'Simpan Link'; }, 2000);
-
-          showToast('✅ Link mirror bioskop berhasil diperbarui: ' + res.active);
-          renderAdminMirrorUI(res.active, mirrors);
-          // Muat ulang katalog agar langsung mengambil dari mirror baru
+          var res = await apiPost('admin/mirror', { url: newMirror, engine: 'klikxxi' });
+          showToast('✅ Mirror KlikXXI disimpan & diaktifkan: ' + res.active);
+          renderAdminMirrorUI(Object.assign({}, info, res));
+          M.page = 1;
           loadMovies(false);
         } catch (err) {
           saveBtn.disabled = false;
-          saveBtn.textContent = 'Simpan Link';
+          saveBtn.textContent = 'Simpan Mirror';
           showToast('❌ Gagal menyimpan mirror: ' + (err.message || 'Error'));
         }
       });
@@ -725,7 +1002,9 @@
     loadMovies: loadMovies,
     openMovieDetail: openMovieDetail,
     playCurrentSelection: playCurrentSelection,
+    playNextEpisode: playNextEpisode,
     openAdmin: openMovieAdminDialog,
+    applyAppConfig: applyAppConfig,
     switchServer: function (tabId) {
       if (!tabId) return;
       M.selectedServer = tabId;

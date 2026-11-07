@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="style.css?v=1.7.45">
+<link rel="stylesheet" href="style.css?v=1.7.46">
 <style id="sig-core-css">
   .sig-bar, .sports-bar { box-sizing: border-box; font-family: "Sora", system-ui, sans-serif; }
   #stageVodBar { width: 100% !important; display: flex !important; flex-direction: column !important; gap: 4px !important; padding: 0 4px 4px !important; margin: 0 !important; background: transparent !important; box-sizing: border-box !important; position: static !important; }
@@ -142,7 +142,11 @@
 <main class="layout">
   <section class="stagepane">
     <div class="stage" id="stage" tabindex="0" aria-label="Pemutar video. Panah atas dan bawah untuk ganti channel.">
-      <video id="video" playsinline webkit-playsinline></video>
+      <canvas class="ambilight-canvas" id="ambilightCanvas" width="32" height="18" aria-hidden="true"></canvas>
+      <video id="video" playsinline webkit-playsinline crossorigin="anonymous"></video>
+
+      <div class="skip-ripple is-left" id="skipRippleLeft" aria-hidden="true"><span>⏪ -10 dtk</span></div>
+      <div class="skip-ripple is-right" id="skipRippleRight" aria-hidden="true"><span>+10 dtk ⏩</span></div>
 
       <div class="idle" id="idle">
         <svg class="idle-mark" viewBox="0 0 100 100" aria-hidden="true">
@@ -264,6 +268,12 @@
               <span class="vod-time-badge vod-time-dur" id="vodTimeDuration">--:--</span>
             </div>
             <div class="vod-bar-right">
+              <button class="ic ic-pill vod-nextep-pill" id="vodNextEpBtn" type="button" hidden title="Putar Episode Berikutnya">
+                <span id="vodNextEpLabel">⏭️ Ep Berikutnya</span>
+              </button>
+              <button class="ic ic-pill vod-speed-pill" id="vodSpeedBtn" type="button" title="Kecepatan Putar Video (1x / 1.25x / 1.5x / 2x)">
+                <span id="vodSpeedLabel">1.0x</span>
+              </button>
               <button class="ic ic-pill vod-server-pill" id="vodServerBtn" type="button" hidden title="Ganti Server Streaming">
                 <span class="vod-server-dot"></span>
                 <span id="vodServerLabel">Server 1</span>
@@ -278,6 +288,7 @@
           <button class="ic" id="nextChBtn" title="Channel berikutnya (↑)" aria-label="Channel berikutnya"><svg viewBox="0 0 24 24"><path d="M18 6v12M6 6l9 6-9 6z"/></svg></button>
           <span class="live" id="liveTag" hidden><i></i>Live</span>
           <span class="grow"></span>
+          <button class="ic ic-pill is-on" id="ambilightBtn" type="button" title="Mode Cinema Ambilight Glow (On/Off)" aria-pressed="true"><span>✨ Glow</span></button>
           <button class="ic ic-pill" id="ccBtn" type="button" title="Subtitle / Auto CC (C)" aria-label="Subtitle atau Auto CC" aria-pressed="false"><span>CC</span></button>
           <button class="ic ic-pill" id="qualBtn" type="button" title="Kualitas / Resolusi Video" aria-label="Kualitas atau Resolusi Video"><span id="qualBadge">AUTO</span></button>
           <button class="ic" id="muteBtn" title="Suara (M)" aria-label="Nyalakan atau matikan suara"><svg viewBox="0 0 24 24" id="muteIcon"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg></button>
@@ -568,8 +579,8 @@
       </div>
       <button class="btn" id="nuAdd" type="button">Tambah pengguna</button>
       
-      <h3>Provider Bioskop & Film (CloudX)</h3>
-      <div style="margin: 8px 0 16px;"><button class="btn ghost" id="acctMovieAdminBtn" type="button" style="width:100%; justify-content:center;">⚙️ Kelola Link & Provider Bioskop</button></div>
+      <h3>Pengaturan Bioskop 21, Engine & Logo Watermark</h3>
+      <div style="margin: 8px 0 16px;"><button class="btn ghost" id="acctMovieAdminBtn" type="button" style="width:100%; justify-content:center;">⚙️ Kelola Bioskop 21, Engine & Watermark</button></div>
     </div>
   </div>
 </dialog>
@@ -709,12 +720,12 @@
   </div>
 </dialog>
 
-<!-- Modal Admin: Kelola Provider & Link Bioskop -->
+<!-- Modal Admin: Kelola Bioskop 21, Engine & Watermark -->
 <dialog class="sheet wide movie-admin-dialog" id="movieAdminDialog" aria-labelledby="movieAdminTitle">
   <form method="dialog" class="sheet-head">
     <div>
-      <h2 id="movieAdminTitle">⚙️ Kelola Provider & Link Bioskop</h2>
-      <p class="sheet-sub">Hanya link yang diaktifkan oleh Admin yang akan ditampilkan ke pengguna biasa.</p>
+      <h2 id="movieAdminTitle">⚙️ Kontrol Bioskop 21, Engine & Watermark</h2>
+      <p class="sheet-sub">Atur status ON/OFF Bioskop 21, custom logo watermark layar, dan mesin streaming utama.</p>
     </div>
     <button class="ic" value="close" aria-label="Tutup"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
   </form>
@@ -725,10 +736,10 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="zan-sig.js?v=1.7.45"></script>
-<script src="zan-sports.js?v=1.7.45"></script>
-<script src="zan-vod.js?v=1.7.45"></script>
-<script src="zan-movie.js?v=1.7.45"></script>
-<script src="app.js?v=1.7.45"></script>
+<script src="zan-sig.js?v=1.7.46"></script>
+<script src="zan-sports.js?v=1.7.46"></script>
+<script src="zan-vod.js?v=1.7.46"></script>
+<script src="zan-movie.js?v=1.7.46"></script>
+<script src="app.js?v=1.7.46"></script>
 </body>
 </html>
