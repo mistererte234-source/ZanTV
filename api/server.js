@@ -1728,13 +1728,17 @@ async function handle(req, res) {
       console.error('[Stream Relay] assertPublicUrl REJECTED:', e.message, 'rawU:', clip(rawU, 90));
       throw fail(400, e.message);
     }
-    const isTsLike = isDirectStreamUrl(rawU);
+    const isSegReq = url.searchParams.get('seg') === '1';
+    const isTsLike = !isSegReq && isDirectStreamUrl(rawU);
+    const isStalker = /\/play\/live\.php\b/i.test(rawU);
+    const cleanRawPath = rawU.split(/[?#]/)[0];
 
     // Cegah multi-connect pada server Stalker/MAC & Xtream Codes (max_connections: 1):
-    // Putus koneksi lama pada MAC / akun Xtream yang sama sebelum buka yang baru
+    // Putus koneksi lama pada MAC / akun Xtream yang sama sebelum buka yang baru (JANGAN terapkan pada segmen HLS seg=1!)
     const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);
-    const xtreamMatch = /\/(?:live|movie|series)\/([^/?#]+)\/([^/?#]+)\//i.exec(rawU);
-    const lockKey = (isTsLike || (q && forceTranscode) || xtreamMatch)
+    const xtreamMatch = /\/(?:live|movie|series)\/([^/?#]+)\/([^/?#]+)\/(\d+)/i.exec(cleanRawPath) ||
+                        /^https?:\/\/[^/]+\/([^/?#]+)\/([^/?#]+)\/(\d+)$/i.exec(cleanRawPath);
+    const lockKey = (!isSegReq && (isTsLike || (q && forceTranscode) || xtreamMatch))
       ? (macMatch
           ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase()
           : (xtreamMatch
@@ -1898,56 +1902,79 @@ async function handle(req, res) {
 
     const cachedDirect = activeStreamLocks.get('direct:' + rawU);
     let upRes, target = initialTarget, chosenUa = primaryUa, chosenSendIp = false;
+    let preloadedXtreamM3u8 = null;
     try {
-      let attempt = await connectUpstream(primaryUa, false);
-      upRes = attempt.res;
-      target = attempt.target;
-      // Jika kena 429 Connection limit reached (panel Xtream masih melepas sesi channel sebelumnya), tunggu 1.1 detik lalu coba lagi
-      if (upRes && (upRes.status === 429 || upRes.status === 458) && !clientClosed) {
-        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
-        await new Promise((r) => setTimeout(r, 1100));
-        if (!clientClosed) {
-          attempt = await connectUpstream(primaryUa, false);
+      // Untuk URL Xtream Live (.ts atau tanpa ekstensi), coba jalur .m3u8 (/hlsr/) lebih dulu agar tidak memicu active_cons ganda
+      if (xtreamMatch && !isSegReq && !/\.m3u8($|\?)/i.test(cleanRawPath)) {
+        try {
+          const xM3u8Url = await assertPublicUrl(`${initialTarget.protocol}//${initialTarget.host}/live/${xtreamMatch[1]}/${xtreamMatch[2]}/${xtreamMatch[3]}.m3u8`);
+          const mAtt = await connectUpstream(primaryUa, false, xM3u8Url);
+          if (mAtt.res && mAtt.res.ok) {
+            const mTxt = await mAtt.res.text();
+            if (mTxt.trimStart().startsWith('#EXTM3U')) {
+              preloadedXtreamM3u8 = { text: mTxt, target: mAtt.target || xM3u8Url, base: xM3u8Url };
+              upRes = mAtt.res;
+              target = mAtt.target || xM3u8Url;
+            }
+          } else if (mAtt.res && mAtt.res.body) {
+            try { mAtt.res.body.cancel(); } catch (e) {}
+          }
+        } catch (e) {}
+      }
+
+      if (!preloadedXtreamM3u8) {
+        let attempt = await connectUpstream(primaryUa, false);
+        upRes = attempt.res;
+        target = attempt.target;
+        // Jika kena 429 Connection limit reached (panel Xtream masih melepas sesi channel sebelumnya), tunggu 1.1 detik lalu coba lagi
+        if (upRes && (upRes.status === 429 || upRes.status === 458) && !clientClosed) {
+          try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+          await new Promise((r) => setTimeout(r, 1100));
+          if (!clientClosed) {
+            attempt = await connectUpstream(primaryUa, false);
+            upRes = attempt.res;
+            target = attempt.target;
+          }
+        }
+        // Jika server Stalker menolak play_token karena sudah pernah ditukar (kode 511/403), coba URL media langsung yang sudah di-cache
+        if (isRejectedTs(upRes) && upRes.status !== 429 && cachedDirect && cachedDirect.url && (Date.now() - cachedDirect.ts < 3 * 3600 * 1000)) {
+          try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+          chosenUa = cachedDirect.ua || primaryUa;
+          chosenSendIp = !!cachedDirect.sendIp;
+          attempt = await connectUpstream(chosenUa, chosenSendIp, cachedDirect.url);
+          upRes = attempt.res;
+          target = attempt.target;
+        }
+        if (isRejectedTs(upRes) && upRes.status !== 429 && uIp && !privateIp(uIp)) {
+          try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+          chosenSendIp = true;
+          attempt = await connectUpstream(primaryUa, true);
+          upRes = attempt.res;
+          target = attempt.target;
+        }
+        if (isRejectedTs(upRes) && upRes.status !== 429 && fallbackUa) {
+          try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+          chosenUa = fallbackUa;
+          chosenSendIp = true;
+          attempt = await connectUpstream(fallbackUa, true);
+          upRes = attempt.res;
+          target = attempt.target;
+        }
+        if (isRejectedTs(upRes) && upRes.status !== 429 && isTsLike && chosenUa !== CHROME_UA) {
+          try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+          chosenUa = CHROME_UA;
+          chosenSendIp = true;
+          attempt = await connectUpstream(CHROME_UA, true);
           upRes = attempt.res;
           target = attempt.target;
         }
       }
-      // Jika server Stalker menolak play_token karena sudah pernah ditukar (kode 511/403), coba URL media langsung yang sudah di-cache
-      if (isRejectedTs(upRes) && upRes.status !== 429 && cachedDirect && cachedDirect.url && (Date.now() - cachedDirect.ts < 3 * 3600 * 1000)) {
-        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
-        chosenUa = cachedDirect.ua || primaryUa;
-        chosenSendIp = !!cachedDirect.sendIp;
-        attempt = await connectUpstream(chosenUa, chosenSendIp, cachedDirect.url);
-        upRes = attempt.res;
-        target = attempt.target;
-      }
-      if (isRejectedTs(upRes) && upRes.status !== 429 && uIp && !privateIp(uIp)) {
-        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
-        chosenSendIp = true;
-        attempt = await connectUpstream(primaryUa, true);
-        upRes = attempt.res;
-        target = attempt.target;
-      }
-      if (isRejectedTs(upRes) && upRes.status !== 429 && fallbackUa) {
-        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
-        chosenUa = fallbackUa;
-        chosenSendIp = true;
-        attempt = await connectUpstream(fallbackUa, true);
-        upRes = attempt.res;
-        target = attempt.target;
-      }
-      if (isRejectedTs(upRes) && upRes.status !== 429 && isTsLike && chosenUa !== CHROME_UA) {
-        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
-        chosenUa = CHROME_UA;
-        chosenSendIp = true;
-        attempt = await connectUpstream(CHROME_UA, true);
-        upRes = attempt.res;
-        target = attempt.target;
-      }
     } catch (e) {
+      if (clientClosed) return res.end();
       console.error('[Stream Relay] Connect error:', e.message, 'target:', clip(rawU, 80));
       throw fail(502, 'Gagal menghubungi server stream: ' + e.message);
     }
+    if (clientClosed) return res.end();
     if (!upRes) throw fail(502, 'Terlalu banyak pengalihan stream');
     console.log(`[Stream Relay] Upstream status: ${upRes.status} (${upRes.headers.get('content-type') || 'unknown'}) for ${target.hostname}`);
     if (!upRes.ok && upRes.status !== 206) {
@@ -1956,7 +1983,7 @@ async function handle(req, res) {
       return res.end(JSON.stringify({ error: 'Stream menjawab kode ' + upRes.status }));
     }
 
-    if (target && target !== initialTarget) {
+    if (isStalker && target && target !== initialTarget) {
       activeStreamLocks.set('direct:' + rawU, { url: target, ua: chosenUa, sendIp: chosenSendIp, ts: Date.now() });
     }
 
@@ -1966,7 +1993,7 @@ async function handle(req, res) {
       res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify({ error: 'Token stream dikunci ke IP perangkat asal atau VLC masih terbuka' }));
     }
-    const isM3u8 = ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname);
+    const isM3u8 = !preloadedXtreamM3u8 && (ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname));
     const suffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
       (ref ? '&ref=' + encodeURIComponent(ref) : '') +
       (org ? '&org=' + encodeURIComponent(org) : '') +
@@ -2024,8 +2051,8 @@ async function handle(req, res) {
       return res.end(buf);
     }
 
-    const isSeg = url.searchParams.get('seg') === '1' || /[._-](seg|chunk|fragment|\d+)\.(ts|m4s|mp4)/i.test(target.pathname);
-    const isLiveTs = !isSeg && !upRes.headers.get('content-length') && !req.headers['range'] && (isTsLike || ct.includes('mp2t'));
+    const isSeg = isSegReq;
+    const isLiveTs = Boolean(preloadedXtreamM3u8) || (!isSeg && !upRes.headers.get('content-length') && !req.headers['range'] && (isTsLike || ct.includes('mp2t')));
     if (isLiveTs) {
       res.writeHead(200, {
         'Content-Type': 'video/mp2t',
@@ -2235,8 +2262,8 @@ async function handle(req, res) {
                   rem = rem.subarray(discard);
                 }
               }
-              // Safety valve: jika sudah buang > 30MB tapi belum ketemu, lepaskan skip
-              if (skipping && skippedBytes > 30 * 1024 * 1024) {
+              // Safety valve: jika sudah buang > 384KB (~0.8 detik) tapi belum ketemu, lepaskan skip agar stream tidak beku
+              if (skipping && skippedBytes > 384 * 1024) {
                 skipping = false;
               }
               if (skipping) continue;
@@ -2275,9 +2302,95 @@ async function handle(req, res) {
         return bytesSent;
       };
 
+      // Mode Xtream HLS-to-TS Stitcher:
+      // Banyak panel Xtream (seperti sansatplus.net:88 / BRI 1) memutus koneksi raw .ts setiap 2-3 detik (262KB) jika max_connections:1,
+      // tetapi menyediakan playlist HLS /live/<user>/<pass>/<id>.m3u8 berisi segmen /hlsr/ 10 detik yang stabil & bebas putus!
+      const tryXtreamHlsStitcher = async () => {
+        if (!preloadedXtreamM3u8) return false;
+        const m3u8Base = preloadedXtreamM3u8.base;
+        let activeM3u8Target = preloadedXtreamM3u8.target;
+        const seenSegs = new Set();
+        let emptyPolls = 0;
+        let stitchedAny = false;
+
+        try {
+          console.log('[Stream Relay] Activated Xtream HLS-to-TS Stitcher for:', m3u8Base.toString());
+
+          const parseSegLines = (txt) => txt.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+          const segKey = (rel) => rel.split('/').pop().split('?')[0];
+
+          let curLines = parseSegLines(preloadedXtreamM3u8.text);
+          // Ambil 4 segmen terakhir (~40 detik buffer) agar langsung jalan mulus tanpa sering polling .m3u8
+          if (curLines.length > 4) {
+            curLines.slice(0, -4).forEach((l) => seenSegs.add(segKey(l)));
+          }
+
+          while (!clientClosed && emptyPolls < 10) {
+            const todo = curLines.filter((l) => !seenSegs.has(segKey(l)));
+            if (todo.length === 0) {
+              emptyPolls++;
+            } else {
+              emptyPolls = 0;
+              for (const rel of todo) {
+                if (clientClosed) break;
+                const k = segKey(rel);
+                seenSegs.add(k);
+                if (seenSegs.size > 60) {
+                  const firstKey = seenSegs.values().next().value;
+                  seenSegs.delete(firstKey);
+                }
+                try {
+                  const segTarget = await assertPublicUrl(new URL(rel, activeM3u8Target).toString());
+                  const segAtt = await connectUpstream(chosenUa, chosenSendIp, segTarget);
+                  if (segAtt.res && segAtt.res.ok && segAtt.res.body) {
+                    const bSent = await pumpTsAligned(segAtt.res.body, segAtt.ac, false);
+                    if (bSent > 0) stitchedAny = true;
+                  } else if (segAtt.res && segAtt.res.body) {
+                    try { segAtt.res.body.cancel(); } catch (e) {}
+                  }
+                } catch (e) {}
+              }
+            }
+            if (clientClosed) break;
+            await new Promise((r) => setTimeout(r, todo.length ? 300 : 2500));
+            if (clientClosed) break;
+
+            // Poll .m3u8 berikutnya (selalu satu koneksi tunggal setelah segmen selesai)
+            let nextLines = null;
+            for (const pollTarget of (activeM3u8Target !== m3u8Base ? [activeM3u8Target, m3u8Base] : [m3u8Base])) {
+              if (clientClosed) break;
+              try {
+                const pAtt = await connectUpstream(chosenUa, chosenSendIp, pollTarget);
+                if (pAtt.res && pAtt.res.ok) {
+                  const pTxt = await pAtt.res.text();
+                  if (pTxt.trimStart().startsWith('#EXTM3U')) {
+                    if (pAtt.target) activeM3u8Target = pAtt.target;
+                    nextLines = parseSegLines(pTxt);
+                    break;
+                  }
+                } else if (pAtt.res && pAtt.res.body) {
+                  try { pAtt.res.body.cancel(); } catch (e) {}
+                }
+              } catch (e) {}
+              await new Promise((r) => setTimeout(r, 300));
+            }
+            curLines = nextLines || [];
+          }
+          return stitchedAny;
+        } catch (e) {
+          return stitchedAny;
+        }
+      };
+
+      if (preloadedXtreamM3u8) {
+        await tryXtreamHlsStitcher();
+        killFfmpeg();
+        return res.end();
+      }
+
       let curBody = upRes.body;
       let curAc = currentAc;
-      let lastDirectTarget = target !== initialTarget ? target : (cachedDirect && cachedDirect.url ? cachedDirect.url : null);
+      let lastDirectTarget = isStalker ? (target !== initialTarget ? target : (cachedDirect && cachedDirect.url ? cachedDirect.url : null)) : null;
       let consecutiveDrops = 0;
       let sessionIndex = 0;
 
@@ -2285,22 +2398,26 @@ async function handle(req, res) {
         const sent = await pumpTsAligned(curBody, curAc, sessionIndex > 0);
         if (clientClosed) break;
         sessionIndex++;
-        if (sent >= 188 * 20) consecutiveDrops = 0;
-        else consecutiveDrops++;
+        if (sent >= 188 * 20) {
+          consecutiveDrops = 0;
+        } else {
+          consecutiveDrops++;
+          lastDirectTarget = null;
+        }
 
         await new Promise((r) => setTimeout(r, 60));
         if (clientClosed) break;
 
         let reconnected = null;
-        // Utamakan URL media langsung (lastDirectTarget) terlebih dahulu, jika gagal langsung buang agar ke portal
-        const targetsToTry = lastDirectTarget ? [lastDirectTarget, initialTarget] : [initialTarget];
+        // Hanya gunakan lastDirectTarget pada portal Stalker (di mana play_token bersifat sekali pakai)
+        const targetsToTry = (isStalker && lastDirectTarget) ? [lastDirectTarget, initialTarget] : [initialTarget];
         for (const tUrl of targetsToTry) {
           if (clientClosed) break;
           try {
             const att = await connectUpstream(chosenUa, chosenSendIp, tUrl);
             if (att.res && att.res.ok && !isRejectedTs(att.res)) {
               reconnected = att;
-              if (att.target && att.target !== initialTarget) {
+              if (isStalker && att.target && att.target !== initialTarget) {
                 lastDirectTarget = att.target;
                 activeStreamLocks.set('direct:' + rawU, { url: att.target, ua: chosenUa, sendIp: chosenSendIp, ts: Date.now() });
               }
