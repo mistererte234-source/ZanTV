@@ -1728,15 +1728,22 @@ async function handle(req, res) {
     }
     const isTsLike = isDirectStreamUrl(rawU);
 
-    // Cegah multi-connect pada server Stalker/MAC: putus koneksi lama pada MAC/sesi yang sama sebelum buka yang baru
+    // Cegah multi-connect pada server Stalker/MAC & Xtream Codes (max_connections: 1):
+    // Putus koneksi lama pada MAC / akun Xtream yang sama sebelum buka yang baru
     const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);
-    const lockKey = (isTsLike || (q && forceTranscode))
-      ? (macMatch ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase() : 'ts:' + (me ? me.key : ip))
+    const xtreamMatch = /\/(?:live|movie|series)\/([^/?#]+)\/([^/?#]+)\//i.exec(rawU);
+    const lockKey = (isTsLike || (q && forceTranscode) || xtreamMatch)
+      ? (macMatch
+          ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase()
+          : (xtreamMatch
+              ? 'xtream:' + initialTarget.hostname.toLowerCase() + ':' + xtreamMatch[1].toLowerCase()
+              : 'ts:' + (me ? me.key : ip)))
       : '';
     if (lockKey && activeStreamLocks.has(lockKey)) {
       try { activeStreamLocks.get(lockKey).kill(); } catch (e) {}
       activeStreamLocks.delete(lockKey);
-      await new Promise((r) => setTimeout(r, 300));
+      // Panel Xtream-Masters butuh ~650ms untuk mendeteksi socket TCP lama putus & menurunkan active_cons menjadi 0
+      await new Promise((r) => setTimeout(r, xtreamMatch ? 650 : 300));
     }
 
     const VLC_UA = 'VLC/3.0.20 LibVLC/3.0.20';
@@ -1893,8 +1900,18 @@ async function handle(req, res) {
       let attempt = await connectUpstream(primaryUa, false);
       upRes = attempt.res;
       target = attempt.target;
+      // Jika kena 429 Connection limit reached (panel Xtream masih melepas sesi channel sebelumnya), tunggu 1.1 detik lalu coba lagi
+      if (upRes && (upRes.status === 429 || upRes.status === 458) && !clientClosed) {
+        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+        await new Promise((r) => setTimeout(r, 1100));
+        if (!clientClosed) {
+          attempt = await connectUpstream(primaryUa, false);
+          upRes = attempt.res;
+          target = attempt.target;
+        }
+      }
       // Jika server Stalker menolak play_token karena sudah pernah ditukar (kode 511/403), coba URL media langsung yang sudah di-cache
-      if (isRejectedTs(upRes) && cachedDirect && cachedDirect.url && (Date.now() - cachedDirect.ts < 3 * 3600 * 1000)) {
+      if (isRejectedTs(upRes) && upRes.status !== 429 && cachedDirect && cachedDirect.url && (Date.now() - cachedDirect.ts < 3 * 3600 * 1000)) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
         chosenUa = cachedDirect.ua || primaryUa;
         chosenSendIp = !!cachedDirect.sendIp;
@@ -1902,14 +1919,14 @@ async function handle(req, res) {
         upRes = attempt.res;
         target = attempt.target;
       }
-      if (isRejectedTs(upRes) && uIp && !privateIp(uIp)) {
+      if (isRejectedTs(upRes) && upRes.status !== 429 && uIp && !privateIp(uIp)) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
         chosenSendIp = true;
         attempt = await connectUpstream(primaryUa, true);
         upRes = attempt.res;
         target = attempt.target;
       }
-      if (isRejectedTs(upRes) && fallbackUa) {
+      if (isRejectedTs(upRes) && upRes.status !== 429 && fallbackUa) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
         chosenUa = fallbackUa;
         chosenSendIp = true;
@@ -1917,7 +1934,7 @@ async function handle(req, res) {
         upRes = attempt.res;
         target = attempt.target;
       }
-      if (isRejectedTs(upRes) && isTsLike && chosenUa !== CHROME_UA) {
+      if (isRejectedTs(upRes) && upRes.status !== 429 && isTsLike && chosenUa !== CHROME_UA) {
         try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
         chosenUa = CHROME_UA;
         chosenSendIp = true;
