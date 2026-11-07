@@ -1796,7 +1796,7 @@ async function handle(req, res) {
     const startFfmpegPipe = (height, directUrl, customUa) => {
       const prof = Q_PROFILES[height];
       if (!prof || !HAS_FFMPEG || activeFfmpegCount >= MAX_FFMPEG) return null;
-      const args = ['-loglevel', 'error', '-fflags', '+genpts+igndts+discardcorrupt+nobuffer'];
+      const args = ['-loglevel', 'error', '-fflags', '+genpts+discardcorrupt'];
       if (directUrl) {
         if (customUa) args.push('-user_agent', customUa);
         const hdrLines = [];
@@ -2071,9 +2071,9 @@ async function handle(req, res) {
         if (!HAS_FFMPEG || activeFfmpegCount >= MAX_FFMPEG) return null;
         const args = [
           '-loglevel', 'error',
-          '-analyzeduration', '500000',
-          '-probesize', '500000',
-          '-fflags', '+genpts+igndts+discardcorrupt+nobuffer',
+          '-analyzeduration', '800000',
+          '-probesize', '800000',
+          '-fflags', '+discardcorrupt',
           '-f', 'mpegts',
           '-i', 'pipe:0',
           '-c:v', 'copy',
@@ -2081,7 +2081,7 @@ async function handle(req, res) {
           '-b:a', '128k',
           '-ar', '48000',
           '-ac', '2',
-          '-flush_packets', '1',
+          '-max_interleave_delta', '0',
           '-f', 'mpegts',
           'pipe:1'
         ];
@@ -2302,60 +2302,141 @@ async function handle(req, res) {
         return bytesSent;
       };
 
-      // Mode Xtream HLS-to-TS Stitcher:
-      // Banyak panel Xtream (seperti sansatplus.net:88 / BRI 1) memutus koneksi raw .ts setiap 2-3 detik (262KB) jika max_connections:1,
-      // tetapi menyediakan playlist HLS /live/<user>/<pass>/<id>.m3u8 berisi segmen /hlsr/ 10 detik yang stabil & bebas putus!
+      // Mode Xtream HLS-to-TS Stitcher dengan Parallel Lookahead Prefetcher:
+      // Menyedot segmen /hlsr/ 10 detik di latar belakang secara paralel (2x-3x kecepatan real-time)
+      // sehingga segmen berikutnya sudah 100% siap di RAM sebelum segmen saat ini selesai diputar (Zero Buffering)!
       const tryXtreamHlsStitcher = async () => {
         if (!preloadedXtreamM3u8) return false;
         const m3u8Base = preloadedXtreamM3u8.base;
         let activeM3u8Target = preloadedXtreamM3u8.target;
         const seenSegs = new Set();
+        const prefetchCache = new Map();
         let emptyPolls = 0;
         let stitchedAny = false;
 
+        const fetchSegBuffer = async (relUrl) => {
+          const segAc = new AbortController();
+          const tmr = setTimeout(() => { try { segAc.abort(); } catch (e) {} }, 22000);
+          try {
+            const segTarget = await assertPublicUrl(new URL(relUrl, activeM3u8Target).toString());
+            const r = await fetch(segTarget, {
+              redirect: 'follow',
+              signal: segAc.signal,
+              headers: { 'User-Agent': chosenUa, 'Accept': '*/*', 'Accept-Encoding': 'identity' }
+            });
+            clearTimeout(tmr);
+            if (!r.ok) return null;
+            const ab = await r.arrayBuffer();
+            return Buffer.from(ab);
+          } catch (e) {
+            clearTimeout(tmr);
+            return null;
+          }
+        };
+
+        const pumpRamBuffer = async (buf) => {
+          if (!buf || !buf.length || clientClosed) return 0;
+          let syncPos = 0;
+          for (let i = 0; i + 188 < Math.min(buf.length, 4096); i++) {
+            if (buf[i] === 0x47 && buf[i + 188] === 0x47) { syncPos = i; break; }
+          }
+          const alignedLen = Math.floor((buf.length - syncPos) / 188) * 188;
+          if (alignedLen <= 0) return 0;
+          const cleanBuf = buf.subarray(syncPos, syncPos + alignedLen);
+
+          if (!audioChecked && cleanBuf.length >= 188 * 20) {
+            audioChecked = true;
+            if (needsAudioRemux(cleanBuf.subarray(0, 188 * 30))) {
+              console.log('[Stream Relay] Detected MP2/AC3 audio in Stitcher -> activating video-copy + AAC audio remux');
+              ff = startAudioRemuxPipe();
+              if (ff && ff.stdin) outStream = ff.stdin;
+            }
+          }
+
+          const step = 188 * 340; // ~64KB per chunk
+          for (let off = 0; off < cleanBuf.length && !clientClosed; off += step) {
+            const slice = cleanBuf.subarray(off, Math.min(cleanBuf.length, off + step));
+            if (!outStream.destroyed && !outStream.write(slice)) {
+              await new Promise((r) => outStream.once('drain', r));
+            }
+            // Pacing ~800KB/s (~3x real-time) di awal untuk membangun cushion buffer 15 detik, lalu ~450KB/s (~1.8x real-time)
+            const delayMs = seenSegs.size <= 5 ? 65 : 110;
+            await new Promise((r) => setTimeout(r, delayMs));
+          }
+          return cleanBuf.length;
+        };
+
         try {
-          console.log('[Stream Relay] Activated Xtream HLS-to-TS Stitcher for:', m3u8Base.toString());
+          console.log('[Stream Relay] Activated Xtream Parallel HLS-to-TS Stitcher for:', m3u8Base.toString());
 
           const parseSegLines = (txt) => txt.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
           const segKey = (rel) => rel.split('/').pop().split('?')[0];
 
           let curLines = parseSegLines(preloadedXtreamM3u8.text);
-          // Ambil 4 segmen terakhir (~40 detik buffer) agar langsung jalan mulus tanpa sering polling .m3u8
-          if (curLines.length > 4) {
-            curLines.slice(0, -4).forEach((l) => seenSegs.add(segKey(l)));
+          // Mulai dari 3 segmen terakhir (~30 detik buffer)
+          if (curLines.length > 3) {
+            curLines.slice(0, -3).forEach((l) => seenSegs.add(segKey(l)));
           }
 
-          while (!clientClosed && emptyPolls < 10) {
+          while (!clientClosed && emptyPolls < 30) {
             const todo = curLines.filter((l) => !seenSegs.has(segKey(l)));
             if (todo.length === 0) {
               emptyPolls++;
             } else {
               emptyPolls = 0;
-              for (const rel of todo) {
+              // Langsung jalankan prefetch paralel di latar belakang untuk segmen ke-2 dan ke-3!
+              for (let i = (stitchedAny ? 0 : 1); i < Math.min(todo.length, 3); i++) {
+                const pk = segKey(todo[i]);
+                if (!prefetchCache.has(pk)) {
+                  prefetchCache.set(pk, fetchSegBuffer(todo[i]));
+                }
+              }
+
+              for (let idx = 0; idx < todo.length; idx++) {
                 if (clientClosed) break;
+                const rel = todo[idx];
                 const k = segKey(rel);
                 seenSegs.add(k);
                 if (seenSegs.size > 60) {
-                  const firstKey = seenSegs.values().next().value;
-                  seenSegs.delete(firstKey);
+                  seenSegs.delete(seenSegs.values().next().value);
                 }
-                try {
-                  const segTarget = await assertPublicUrl(new URL(rel, activeM3u8Target).toString());
-                  const segAtt = await connectUpstream(chosenUa, chosenSendIp, segTarget);
-                  if (segAtt.res && segAtt.res.ok && segAtt.res.body) {
-                    const bSent = await pumpTsAligned(segAtt.res.body, segAtt.ac, false);
-                    if (bSent > 0) stitchedAny = true;
-                  } else if (segAtt.res && segAtt.res.body) {
-                    try { segAtt.res.body.cancel(); } catch (e) {}
+
+                // Pastikan segmen berikutnya (idx + 1) sedang di-prefetch selagi segmen ini dikirim
+                if (idx + 1 < todo.length) {
+                  const nextK = segKey(todo[idx + 1]);
+                  if (!prefetchCache.has(nextK)) {
+                    prefetchCache.set(nextK, fetchSegBuffer(todo[idx + 1]));
                   }
-                } catch (e) {}
+                }
+
+                if (!stitchedAny && !prefetchCache.has(k)) {
+                  // Segmen pertama kali: stream langsung chunk-by-chunk agar video langsung nyala < 1 detik!
+                  try {
+                    const segTarget = await assertPublicUrl(new URL(rel, activeM3u8Target).toString());
+                    const segAtt = await connectUpstream(chosenUa, chosenSendIp, segTarget);
+                    if (segAtt.res && segAtt.res.ok && segAtt.res.body) {
+                      const bSent = await pumpTsAligned(segAtt.res.body, segAtt.ac, false);
+                      if (bSent > 0) stitchedAny = true;
+                    } else if (segAtt.res && segAtt.res.body) {
+                      try { segAtt.res.body.cancel(); } catch (e) {}
+                    }
+                  } catch (e) {}
+                } else {
+                  // Segmen ke-2 dst: ambil dari RAM hasil prefetch paralel (0ms gap!)
+                  const pProm = prefetchCache.get(k) || fetchSegBuffer(rel);
+                  prefetchCache.delete(k);
+                  const buf = await pProm;
+                  if (buf && buf.length) {
+                    const bSent = await pumpRamBuffer(buf);
+                    if (bSent > 0) stitchedAny = true;
+                  }
+                }
               }
             }
             if (clientClosed) break;
-            await new Promise((r) => setTimeout(r, todo.length ? 300 : 2500));
+            await new Promise((r) => setTimeout(r, todo.length ? 400 : 1800));
             if (clientClosed) break;
 
-            // Poll .m3u8 berikutnya (selalu satu koneksi tunggal setelah segmen selesai)
             let nextLines = null;
             for (const pollTarget of (activeM3u8Target !== m3u8Base ? [activeM3u8Target, m3u8Base] : [m3u8Base])) {
               if (clientClosed) break;
@@ -2372,12 +2453,14 @@ async function handle(req, res) {
                   try { pAtt.res.body.cancel(); } catch (e) {}
                 }
               } catch (e) {}
-              await new Promise((r) => setTimeout(r, 300));
+              await new Promise((r) => setTimeout(r, 250));
             }
             curLines = nextLines || [];
           }
+          prefetchCache.clear();
           return stitchedAny;
         } catch (e) {
+          prefetchCache.clear();
           return stitchedAny;
         }
       };

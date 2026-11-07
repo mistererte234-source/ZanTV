@@ -976,6 +976,7 @@ var CC = { mode: LS.get('cc-mode', 'off'), srcLang: LS.get('cc-src', 'en-US'), h
 
 function destroyEngine() {
   clearTimeout(E.stall);
+  if (typeof cushionTimer !== 'undefined' && cushionTimer) { clearInterval(cushionTimer); cushionTimer = null; }
   if (E.probeAc) { try { E.probeAc.abort(); } catch (e) {} E.probeAc = null; }
   stopSpeechCc();
   clearCcDisplay();
@@ -1063,19 +1064,19 @@ function startHls(url, token) {
       enableIMSC1: true,
       enableCEA708Captions: true,
       capLevelToPlayerSize: isEco,
-      // Turbo Buffer & Zero-Lag Live Sync Engine (OTT Navigator Enhanced for Live, Deep Buffered for VOD)
-      lowLatencyMode: !isVod,
-      backBufferLength: isVod ? 90 : (isEco ? 15 : 30),
-      maxBufferLength: isVod ? 90 : (isEco ? 20 : 35),
-      maxMaxBufferLength: isVod ? 180 : (isEco ? 35 : 70),
-      maxBufferSize: (isVod ? 120 : 60) * 1024 * 1024,
+      // Deep Smooth Buffer Engine: Matikan lowLatencyMode pada HLS standar agar tidak patah-patah / menguras buffer
+      lowLatencyMode: false,
+      backBufferLength: isVod ? 90 : 30,
+      maxBufferLength: isVod ? 90 : 45,
+      maxMaxBufferLength: isVod ? 180 : 90,
+      maxBufferSize: (isVod ? 120 : 80) * 1024 * 1024,
       maxBufferHole: 0.8,
       highBufferWatchdogPeriod: 2,
-      nudgeOffset: 0.1,
-      nudgeMaxRetry: 5,
-      maxStarvationDelay: isVod ? 4.0 : 2.5,
+      nudgeOffset: 0.15,
+      nudgeMaxRetry: 6,
+      maxStarvationDelay: isVod ? 4.0 : 3.5,
       liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 8,
+      liveMaxLatencyDurationCount: 10,
       liveDurationInfinity: !isVod,
       manifestLoadingMaxRetry: 6,
       manifestLoadingRetryDelay: 500,
@@ -1528,7 +1529,7 @@ function startTs(url, type, token) {
       {
         enableWorker: false,
         enableStashBuffer: true,
-        stashInitialSize: 384 * 1024,
+        stashInitialSize: 512 * 1024,
         isLive: true,
         lazyLoad: false,
         lazyLoadMaxDuration: 0,
@@ -1834,7 +1835,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
   el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
-    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.49 · Token #' + E.token + '</small>';
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.50 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
@@ -1910,10 +1911,35 @@ el.video.addEventListener('resize', function () {
   }
   updateVideoAspect();
 });
+var cushionTimer = null;
 el.video.addEventListener('waiting', function () {
   if (healBufferGap()) { setBusy(false); return; }
   setBusy(true);
   var token = E.token;
+
+  // Smart Anti-Stutter Rebuffer Cushion:
+  // Saat stream live kehabisan buffer, tahan selama ~1-2 detik hingga terkumpul minimal 2.5 detik buffer
+  // agar browser tidak terjebak siklus jalan-0.2-detik -> macet -> jalan-0.2-detik!
+  if (E.mode === 'mpegts' && !cushionTimer && S.playing && !S.playing.isVod && !S.playing.isMovie) {
+    var waitStart = Date.now();
+    try { el.video.pause(); } catch (e) {}
+    cushionTimer = setInterval(function () {
+      if (token !== E.token) {
+        clearInterval(cushionTimer);
+        cushionTimer = null;
+        return;
+      }
+      var b = el.video.buffered;
+      var ahead = (b && b.length) ? (b.end(b.length - 1) - el.video.currentTime) : 0;
+      if (ahead >= 2.5 || (Date.now() - waitStart >= 2400 && ahead >= 0.6) || Date.now() - waitStart >= 4000) {
+        clearInterval(cushionTimer);
+        cushionTimer = null;
+        setBusy(false);
+        el.video.play().catch(function () {});
+      }
+    }, 180);
+  }
+
   setTimeout(function () { if (token === E.token && el.video.readyState < 3 && healBufferGap()) setBusy(false); }, 350);
   clearTimeout(E.stall);
   E.stall = setTimeout(function () {
@@ -2042,17 +2068,17 @@ function applyClientEcoMode(targetH) {
   if (!targetH || targetH <= 0 || (realH > 0 && targetH >= realH)) {
     QUAL.clientScaledH = 0;
     if (E.hls && E.hls.config) {
-      E.hls.config.maxBufferLength = 30;
-      E.hls.config.maxMaxBufferLength = 60;
+      E.hls.config.maxBufferLength = 45;
+      E.hls.config.maxMaxBufferLength = 90;
       E.hls.config.backBufferLength = 30;
     }
     return;
   }
   QUAL.clientScaledH = targetH;
   if (E.hls && E.hls.config) {
-    E.hls.config.maxBufferLength = targetH <= 360 ? 5 : targetH <= 480 ? 7 : 12;
-    E.hls.config.maxMaxBufferLength = targetH <= 360 ? 10 : targetH <= 480 ? 14 : 24;
-    E.hls.config.backBufferLength = 4;
+    E.hls.config.maxBufferLength = 35;
+    E.hls.config.maxMaxBufferLength = 70;
+    E.hls.config.backBufferLength = 20;
   }
 }
 
@@ -2235,7 +2261,6 @@ function selectQualityOption(qmode, level, sq) {
   QUAL.targetH = sq || 0;
   LS.set('qual-mode', qmode);
   LS.set('qual-target-h', QUAL.targetH);
-  LS.set('qual-server-q', 0);
 
   if (!S.playing) {
     updateQualBadge();
@@ -2243,7 +2268,24 @@ function selectQualityOption(qmode, level, sq) {
     return;
   }
 
-  // Terapkan langsung pada player yang sedang berjalan (TANPA membuka koneksi kedua / memutus sesi stream!)
+  var wantedH = qmode === 'saver' ? 480 : (qmode === 'target' ? QUAL.targetH : 0);
+  var hasMultiLevels = !!(QUAL.levels && QUAL.levels.length > 1);
+  var isLiveNonDash = !(S.playing.isVod || S.playing.isMovie) && kindOf(S.playing.url) !== 'dash' && !S.playing.clearKeys && !S.playing._noServerTranscode;
+
+  // Jika stream single-bitrate (misal 1080p) dan user memilih 720p/480p/360p (atau kembali ke Auto dari mode kompresi server),
+  // aktifkan kompresi FFmpeg di VPS agar resolusi & bitrate benar-benar diperkecil dan anti-buffering!
+  if (!hasMultiLevels && isLiveNonDash) {
+    var targetServerQ = (wantedH === 360 || wantedH === 480 || wantedH === 720) ? wantedH : 0;
+    if (targetServerQ !== (QUAL.serverQ || 0)) {
+      LS.set('qual-server-q', targetServerQ);
+      toast(targetServerQ ? ('⚡ Mengompres stream ke ' + targetServerQ + 'p di server VPS…') : '⚡ Kembali ke kualitas asli (Auto)…');
+      play(S.playing, { retry: true, viaProxy: true, forceServerQ: targetServerQ, sourceIndex: S.playing._sourceIndex });
+      return;
+    }
+  }
+
+  LS.set('qual-server-q', 0);
+
   if (E.hls) {
     applyHlsQuality(E.hls);
   } else if (E.shaka) {
@@ -2251,19 +2293,18 @@ function selectQualityOption(qmode, level, sq) {
   } else if (E.dash) {
     applyDashQuality(E.dash);
   } else {
-    applyClientEcoMode(qmode === 'saver' ? 480 : (qmode === 'target' ? QUAL.targetH : 0));
+    applyClientEcoMode(wantedH);
   }
 
   updateQualBadge();
   renderQualMenu();
 
-  var wantedH = qmode === 'saver' ? 480 : (qmode === 'target' ? QUAL.targetH : 0);
   if (qmode === 'auto') {
     toast('Resolusi Otomatis aktif');
-  } else if (QUAL.levels && QUAL.levels.length > 1) {
+  } else if (hasMultiLevels) {
     toast(qmode === 'saver' ? 'Mode Hemat Data aktif (≤ 480p)' : 'Resolusi diubah ke ' + (wantedH || '') + 'p');
   } else {
-    toast(qmode === 'saver' ? 'Mode Hemat Data (≤ 480p) aktif' : 'Resolusi ' + wantedH + 'p (Mode Hemat Buffer) aktif');
+    toast(qmode === 'saver' ? 'Mode Hemat Data (≤ 480p) aktif' : 'Resolusi ' + wantedH + 'p aktif');
   }
 }
 
@@ -4256,7 +4297,7 @@ if (freshBtnEl) {
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js?v=1.7.49').then(function (reg) {
+    navigator.serviceWorker.register('sw.js?v=1.7.50').then(function (reg) {
       if (reg) {
         reg.update().catch(function () {});
         reg.addEventListener('updatefound', function () {
