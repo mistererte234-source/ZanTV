@@ -8,9 +8,7 @@
 
 const KNOWN_MIRRORS = [
   'https://klikxxi.shop',
-  'https://new39.ngefilm.site',
   'https://filmlokal.me',
-  'https://idmxl.ink',
   'https://ww11.pencurimovie.sbs'
 ];
 
@@ -311,8 +309,8 @@ async function extractStream(movieUrl, tabId) {
 
   let iframeSrc = null;
 
-  // 1. Try AJAX Muvipro for the specified tab (e.g. p3 for VOE, p1 for HgCloud)
-  const tabsToTry = [tabId, 'p3', 'p1', 'p2', 'p4'].filter((v, i, a) => a.indexOf(v) === i);
+  // 1. Try AJAX Muvipro tabs to find a VOE direct stream first, or fallback to first available iframe
+  const tabsToTry = ['p3', tabId, 'p1', 'p2', 'p4'].filter((v, i, a) => a.indexOf(v) === i);
 
   if (postId) {
     for (const tid of tabsToTry) {
@@ -336,8 +334,13 @@ async function extractStream(movieUrl, tabId) {
         const ajaxHtml = await ajaxRes.text();
         const ifm = /<iframe[^>]+src="([^"]+)"/i.exec(ajaxHtml);
         if (ifm && ifm[1]) {
-          iframeSrc = ifm[1];
-          break;
+          const candidate = ifm[1];
+          if (!iframeSrc) iframeSrc = candidate;
+          // Jika menemukan VOE player (VOE / shannoncoldalready), utamakan langsung dan berhenti mencari
+          if (candidate.includes('voe.sx') || candidate.includes('shannoncoldalready') || candidate.includes('cloudwindow') || candidate.includes('voe-network') || candidate.includes('yugotehe')) {
+            iframeSrc = candidate;
+            break;
+          }
         }
       } catch (e) {}
     }

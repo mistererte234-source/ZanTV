@@ -293,8 +293,18 @@
     if (detail.director) metaParts.push('<span>🎬 ' + escapeHtml(detail.director) + '</span>');
     if (el.movieSheetMeta) el.movieSheetMeta.innerHTML = metaParts.join('<span style="opacity:0.4">•</span>') || '<span>Koleksi Bioskop 21</span>';
 
-    // Render Server Tabs
-    var servers = detail.servers || [{ id: 'p3', name: 'Server 3' }, { id: 'p1', name: 'Server 1' }];
+    // Render Server Tabs (Prioritaskan Server 3 VOE yang bersih direct HLS)
+    var rawServers = detail.servers || [{ id: 'p3', name: 'Server 3' }, { id: 'p1', name: 'Server 1' }];
+    var servers = rawServers.slice();
+    servers.sort(function (a, b) {
+      if (a.id === 'p3') return -1;
+      if (b.id === 'p3') return 1;
+      return 0;
+    });
+    servers.forEach(function (s) {
+      if (s.id === 'p3') s.name = 'Server 3 (HD Bersih)';
+      else if (s.name.indexOf('Cadangan') === -1) s.name = s.name.replace('Server', 'Cadangan');
+    });
     var hasP3 = servers.some(function (s) { return s.id === 'p3'; });
     M.selectedServer = hasP3 ? 'p3' : (servers[0] ? servers[0].id : 'p1');
 
@@ -385,6 +395,11 @@
 
     if (!streamRes || !streamRes.streamUrl) {
       showToast('❌ Server film sedang sibuk. Silakan pilih server lain.');
+      return;
+    }
+
+    if (streamRes.kind === 'iframe' || (!streamRes.streamUrl.includes('.m3u8') && !streamRes.streamUrl.includes('cloudwindow') && streamRes.kind !== 'hls')) {
+      showToast('⚠️ Server ini hanya menyediakan web player pihak ketiga dengan iklan. Silakan gunakan Server 3 (HD Bersih).');
       return;
     }
 
@@ -616,13 +631,20 @@
   function renderAdminMirrorUI(activeUrl, mirrors) {
     if (!el.movieAdminList) return;
     activeUrl = activeUrl || 'https://klikxxi.shop';
-    mirrors = mirrors || [];
-    if (mirrors.indexOf(activeUrl) === -1) mirrors.unshift(activeUrl);
+    var verified = ['https://klikxxi.shop', 'https://filmlokal.me', 'https://ww11.pencurimovie.sbs'];
+    if (mirrors && mirrors.length) {
+      mirrors.forEach(function (m) {
+        if (!m.includes('ngefilm') && !m.includes('idmxl') && verified.indexOf(m) === -1) {
+          verified.push(m);
+        }
+      });
+    }
+    if (verified.indexOf(activeUrl) === -1) verified.unshift(activeUrl);
 
-    var chipsHtml = mirrors.map(function (m) {
+    var chipsHtml = verified.map(function (m) {
       var isCur = m === activeUrl;
       return '<button type="button" class="movie-mirror-chip' + (isCur ? ' is-active' : '') + '" data-mirror="' + escapeHtml(m) + '">' +
-        (isCur ? '✓ ' : '') + escapeHtml(m.replace(/^https?:\/\//, '')) +
+        (isCur ? '✓ ' : '') + escapeHtml(m.replace(/^https?:\/\//, '')) + ' (HLS Clean)' +
       '</button>';
     }).join('');
 
@@ -637,14 +659,14 @@
             '</div>' +
           '</div>' +
         '</div>' +
-        '<div class="movie-admin-desc">Jika domain utama terblokir internet positif/Kominfo, ganti link mirror di bawah ini agar katalog & stream tetap normal tanpa restart server.</div>' +
+        '<div class="movie-admin-desc">Gunakan mirror terverifikasi Direct HLS di bawah ini agar video bebas iklan dan dapat diputar langsung di player ZanTV.</div>' +
         '<div class="movie-admin-url-box">' +
           '<span class="movie-admin-url-label">Domain:</span>' +
           '<input type="url" class="movie-admin-url-input" id="movieMirrorInput" value="' + escapeHtml(activeUrl) + '" placeholder="https://klikxxi.shop" autocomplete="off" spellcheck="false">' +
           '<button type="button" class="btn primary movie-admin-url-btn" id="movieMirrorSaveBtn">Simpan Link</button>' +
         '</div>' +
         '<div style="margin-top:8px;">' +
-          '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;">Pilih Cepat Mirror Cadangan:</div>' +
+          '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;">Mirror Cadangan Terverifikasi Direct HLS:</div>' +
           '<div class="movie-mirror-chips" id="movieMirrorChips" style="display:flex;flex-wrap:wrap;gap:6px;">' +
             chipsHtml +
           '</div>' +

@@ -83,6 +83,10 @@ function save() {
 }
 load();
 if (db.movieMirror && movieProvider && typeof movieProvider.setActiveMirror === 'function') {
+  if (db.movieMirror.includes('ngefilm') || db.movieMirror.includes('idmxl')) {
+    db.movieMirror = 'https://klikxxi.shop';
+    save();
+  }
   movieProvider.setActiveMirror(db.movieMirror);
 }
 
