@@ -13,8 +13,13 @@ echo "⚙️ [ZanTV] Deploying API Backend to /opt/zantv-api/..."
 mkdir -p /opt/zantv-api
 cp -r api/* /opt/zantv-api/ 2>/dev/null || true
 
+echo "🎬 [ZanTV] Ensuring FFmpeg is installed for DVB/MP2 Live Audio Remux..."
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  apt-get update -y && apt-get install -y ffmpeg || true
+fi
+
 echo "🔄 [ZanTV] Restarting Backend API Service & Reloading Nginx..."
 systemctl restart zantv-api 2>/dev/null || true
 systemctl reload nginx 2>/dev/null || true
 
-echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.47 sudah aktif."
+echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.48 sudah aktif."

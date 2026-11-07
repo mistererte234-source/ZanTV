@@ -1967,8 +1967,6 @@ async function handle(req, res) {
       return res.end(JSON.stringify({ error: 'Token stream dikunci ke IP perangkat asal atau VLC masih terbuka' }));
     }
     const isM3u8 = ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname);
-    const needsCustomHeaders = !!(ua || ref || org);
-    const isTargetHttps = target.protocol === 'https:';
     const suffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
       (ref ? '&ref=' + encodeURIComponent(ref) : '') +
       (org ? '&org=' + encodeURIComponent(org) : '') +
@@ -1979,11 +1977,6 @@ async function handle(req, res) {
         // Jika target memiliki query params dan rel tidak punya, wariskan query params target
         if (target.search && !absUrl.search) {
           absUrl.search = target.search;
-        }
-        // Jika stream HTTPS publik dan tidak butuh custom header (seperti jorvakstreamcache),
-        // kembalikan URL absolut langsung ke CDN agar browser mengambil segmen menggunakan IP asli user (bebas blokir IP VPS & super cepat!)
-        if (!needsCustomHeaders && isTargetHttps && absUrl.protocol === 'https:') {
-          return absUrl.toString();
         }
         return '/api/stream?u=' + encodeURIComponent(absUrl.toString()) + suffix;
       } catch (e) { return rel; }
@@ -2045,8 +2038,92 @@ async function handle(req, res) {
       });
       if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-      const ff = q ? startFfmpegPipe(q, null, chosenUa) : null;
-      const outStream = (ff && ff.stdin) ? ff.stdin : res;
+      // Fungsi remux ringan (-c:v copy -c:a aac) khusus untuk stream DVB/Satelit (seperti BRI 1 / sansatplus)
+      // yang memakai audio MP2 (MPEG-1 Layer 2) atau AC3 yang ditolak MSE browser Chrome/Safari
+      const startAudioRemuxPipe = () => {
+        if (!HAS_FFMPEG || activeFfmpegCount >= MAX_FFMPEG) return null;
+        const args = [
+          '-loglevel', 'error',
+          '-analyzeduration', '500000',
+          '-probesize', '500000',
+          '-fflags', '+genpts+igndts+discardcorrupt+nobuffer',
+          '-f', 'mpegts',
+          '-i', 'pipe:0',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-ar', '48000',
+          '-ac', '2',
+          '-flush_packets', '1',
+          '-f', 'mpegts',
+          'pipe:1'
+        ];
+        try {
+          const proc = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'ignore'] });
+          activeFfmpegCount++;
+          ffCounted = true;
+          ffProc = proc;
+          proc.on('error', () => { killFfmpeg(); });
+          proc.on('close', () => { killFfmpeg(); });
+          if (proc.stdin) proc.stdin.on('error', () => {});
+          proc.stdout.on('error', () => {});
+          proc.stdout.pipe(res);
+          return proc;
+        } catch (e) {
+          return null;
+        }
+      };
+
+      // Deteksi apakah PMT MPEG-TS memiliki audio non-AAC (0x03/0x04 MP2, 0x06/0x81 AC3) atau MPEG Audio Layer 2
+      const needsAudioRemux = (chunk) => {
+        for (let p = 0; p + 188 <= chunk.length; p += 188) {
+          if (chunk[p] !== 0x47) continue;
+          const payloadStart = (chunk[p + 1] & 0x40) !== 0;
+          if (!payloadStart) continue;
+          const pid = ((chunk[p + 1] & 0x1F) << 8) | chunk[p + 2];
+          const af = (chunk[p + 3] >> 4) & 0x3;
+          let off = 4 + ((af === 2 || af === 3) ? 1 + chunk[p + 4] : 0);
+          if (off + 16 >= 188) continue;
+
+          // 1. Cek PES audio stream_id 0xC0..0xDF untuk header MPEG Audio Layer 2 ((b[1] & 0x06) === 0x04)
+          if (chunk[p + off] === 0x00 && chunk[p + off + 1] === 0x00 && chunk[p + off + 2] === 0x01) {
+            const sid = chunk[p + off + 3];
+            if (sid >= 0xC0 && sid <= 0xDF) {
+              const pesHdrLen = chunk[p + off + 8];
+              const esOff = p + off + 9 + pesHdrLen;
+              if (esOff + 2 < p + 188 && chunk[esOff] === 0xFF && (chunk[esOff + 1] & 0xE0) === 0xE0) {
+                const layerBits = (chunk[esOff + 1] >> 1) & 0x03;
+                if (layerBits === 2 || layerBits === 3) return true; // Layer II (MP2) atau Layer I (MP1)
+              }
+            } else if (sid === 0xBD) {
+              return true; // Private Stream 1 (AC3 / EAC3 di DVB TS)
+            }
+          }
+
+          // 2. Cek tabel PMT (Program Map Table, table_id === 0x02) untuk stream_type 0x03/0x04 (MP1/MP2) atau 0x81/0x87 (AC3/EAC3)
+          if (pid !== 0 && pid !== 17) {
+            const ptr = chunk[p + off];
+            const tblOff = p + off + 1 + ptr;
+            if (tblOff + 12 < p + 188 && chunk[tblOff] === 0x02) {
+              const secLen = ((chunk[tblOff + 1] & 0x0F) << 8) | chunk[tblOff + 2];
+              const progInfoLen = ((chunk[tblOff + 10] & 0x0F) << 8) | chunk[tblOff + 11];
+              let pos = tblOff + 12 + progInfoLen;
+              const endPos = Math.min(p + 188, tblOff + 3 + secLen - 4);
+              while (pos + 5 <= endPos) {
+                const st = chunk[pos];
+                const esInfoLen = ((chunk[pos + 3] & 0x0F) << 8) | chunk[pos + 4];
+                if (st === 0x03 || st === 0x04 || st === 0x81 || st === 0x87) return true;
+                pos += 5 + esInfoLen;
+              }
+            }
+          }
+        }
+        return false;
+      };
+
+      let ff = q ? startFfmpegPipe(q, null, chosenUa) : null;
+      let outStream = (ff && ff.stdin) ? ff.stdin : res;
+      let audioChecked = !!ff || !HAS_FFMPEG;
 
       let lastVideoPts = null;
       let lastTailSig = null;
@@ -2109,6 +2186,17 @@ async function handle(req, res) {
               }
               if (syncPos > 0) rem = rem.subarray(syncPos);
               synced = true;
+            }
+
+            // Pada awal stream (~3.7KB pertama), periksa apakah tabel PMT / audio menggunakan MP2/AC3 yang butuh remux instan ke AAC
+            if (!audioChecked) {
+              if (rem.length < 188 * 20) continue;
+              audioChecked = true;
+              if (needsAudioRemux(rem)) {
+                console.log('[Stream Relay] Detected MP2/AC3 audio in Live TS -> activating zero-CPU video-copy + AAC audio remux for:', clip(rawU, 70));
+                ff = startAudioRemuxPipe();
+                if (ff && ff.stdin) outStream = ff.stdin;
+              }
             }
 
             // Jika ini reconnect, lewati duplikasi paket lama (overlap) yang dikirim ulang server IPTV
