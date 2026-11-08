@@ -1064,6 +1064,8 @@ function startHls(url, token) {
       enableIMSC1: true,
       enableCEA708Captions: true,
       capLevelToPlayerSize: isEco,
+      // Mulai dari estimasi bandwidth SD (~800 kbps) untuk Live TV agar langsung memilih varian SD seperti OTT Navigator
+      abrEwmaDefaultEstimate: isVod ? 2500000 : 800000,
       // Deep Smooth Buffer Engine: Matikan lowLatencyMode pada HLS standar agar tidak patah-patah / menguras buffer
       lowLatencyMode: false,
       backBufferLength: isVod ? 90 : 30,
@@ -1092,6 +1094,15 @@ function startHls(url, token) {
         return { index: idx, height: lv.height || 0, width: lv.width || 0, bitrate: lv.bitrate || 0 };
       });
       QUAL.levels = lvls;
+      // Jika stream HLS hanya punya 1 level (single-bitrate FHD) dan user memilih Mode Hemat Data / 480p / 360p,
+      // gunakan kompresi FFmpeg di server agar keluar versi SD yang ringan
+      var wantedQ = QUAL.mode === 'saver' ? 480 : (QUAL.mode === 'target' && (QUAL.targetH === 360 || QUAL.targetH === 480 || QUAL.targetH === 720) ? QUAL.targetH : 0);
+      if (!isVod && lvls.length <= 1 && wantedQ && !E.serverTranscode && S.playing && !S.playing._noServerTranscode && !S.playing.clearKeys) {
+        try { hls.destroy(); } catch (e) {}
+        E.hls = null;
+        play(S.playing, { retry: true, viaProxy: true, forceServerQ: wantedQ, sourceIndex: S.playing._sourceIndex });
+        return;
+      }
       applyHlsQuality(hls);
       if (data && data.subtitleTracks && data.subtitleTracks.length > 0) {
         CC.hasTrack = true;
@@ -1179,8 +1190,9 @@ function startDash(url, token, ch, currentClearKeys) {
     if (token !== E.token) return;
     var p = dashjs.MediaPlayer().create();
     E.dash = p; E.mode = 'dash';
+    var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
 
-    // 🚀 ULTRA-SMOOTH BUFFER & ANTI-STALL ENGINE (Better than OTT Navigator)
+    // 🚀 ULTRA-SMOOTH BUFFER & ANTI-STALL ENGINE (SD Auto-Target seperti OTT Navigator)
     p.updateSettings({
       streaming: {
         abandonLoadTimeout: 10000,
@@ -1217,7 +1229,7 @@ function startDash(url, token, ch, currentClearKeys) {
         },
         abr: {
           autoSwitchBitrate: { video: true, audio: true },
-          bandwidthSafetyFactor: 0.82,
+          bandwidthSafetyFactor: 0.78,
           rules: {
             throughputRule: { active: true },
             bolaRule: { active: true },
@@ -1226,7 +1238,8 @@ function startDash(url, token, ch, currentClearKeys) {
             droppedFramesRule: { active: false },
             abandonRequestsRule: { active: false }
           },
-          initialBitrate: { video: 2200 }
+          initialBitrate: { video: isVod ? 2000 : 800 },
+          maxBitrate: { video: (!isVod && QUAL.mode === 'auto') ? 2100 : -1 }
         },
         retryIntervals: {
           mediaSegment: 400,
@@ -1394,17 +1407,28 @@ function startShaka(url, token, ch, currentClearKeys) {
     var p = new shaka.Player(el.video);
     E.shaka = p;
     E.mode = 'shaka';
+    var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
+
+    var abrCfg = {
+      enabled: true,
+      defaultBandwidthEstimate: isVod ? 2500000 : 800000,
+      switchInterval: 4
+    };
+    // Untuk Live TV di mode Auto, kunci awal di SD (<= 576p) seperti OTT Navigator agar tidak lompat ke 1080p 50fps (10 Mbps)
+    if (!isVod && QUAL.mode === 'auto') {
+      abrCfg.restrictions = { maxHeight: 576, maxBandwidth: 2100000 };
+    }
 
     var cfg = {
       streaming: {
-        bufferingGoal: 15,
-        rebufferingGoal: 2,
+        bufferingGoal: 18,
+        rebufferingGoal: 2.5,
         bufferBehind: 30,
         retryParameters: {
           maxAttempts: 8,
           baseDelay: 500,
           backoffFactor: 1.4,
-          timeout: 10000
+          timeout: 12000
         },
         inaccurateManifestTolerance: 0,
         safeSeekOffset: 8
@@ -1421,11 +1445,7 @@ function startShaka(url, token, ch, currentClearKeys) {
           ignoreMinBufferTime: true
         }
       },
-      abr: {
-        enabled: true,
-        defaultBandwidthEstimate: 3000000,
-        switchInterval: 4
-      }
+      abr: abrCfg
     };
 
     var keys = currentClearKeys || (ch && ch.clearKeys);
@@ -1497,22 +1517,74 @@ function startShaka(url, token, ch, currentClearKeys) {
 function applyShakaQuality(p) {
   if (!p) return;
   try {
+    var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
+    var tracks = (p.getVariantTracks() || []).filter(function (t) { return t.type === 'variant' && t.height; });
     if (QUAL.mode === 'auto') {
-      p.configure({ abr: { enabled: true } });
+      if (!isVod && tracks.length > 1) {
+        var sdTracks = tracks.filter(function (t) { return t.height <= 576; });
+        var minH = tracks.reduce(function (m, t) { return Math.min(m, t.height || 9999); }, 9999);
+        var capH = sdTracks.length ? 576 : minH;
+        p.configure({
+          abr: {
+            enabled: true,
+            restrictions: { maxHeight: capH, maxBandwidth: sdTracks.length ? 2100000 : Infinity }
+          }
+        });
+        var active = tracks.find(function (t) { return t.active; });
+        if (active && active.height > capH) {
+          var bestSd = (sdTracks.length ? sdTracks : tracks).slice().sort(function (a, b) {
+            return (b.height - a.height) || (b.bandwidth - a.bandwidth);
+          })[0];
+          if (bestSd) {
+            p.selectVariantTrack(bestSd, true);
+            QUAL.activeHeight = bestSd.height;
+          }
+        }
+      } else {
+        p.configure({
+          abr: {
+            enabled: true,
+            restrictions: { maxHeight: Infinity, maxBandwidth: Infinity }
+          }
+        });
+      }
       applyClientEcoMode(0);
-    } else if (QUAL.mode === 'manual' && QUAL.level >= 0) {
-      p.configure({ abr: { enabled: false } });
-      var tracks = p.getVariantTracks() || [];
-      var targetTrack = tracks[QUAL.level];
-      if (targetTrack) p.selectVariantTrack(targetTrack, false);
+    } else if ((QUAL.mode === 'native' || QUAL.mode === 'manual') && QUAL.level >= 0) {
+      p.configure({
+        abr: {
+          enabled: false,
+          restrictions: { maxHeight: Infinity, maxBandwidth: Infinity }
+        }
+      });
+      var chosenLv = QUAL.levels && QUAL.levels[QUAL.level];
+      var targetTrack = (chosenLv && chosenLv.id != null)
+        ? tracks.find(function (t) { return t.id === chosenLv.id; })
+        : tracks[QUAL.level];
+      if (targetTrack) {
+        p.selectVariantTrack(targetTrack, true);
+        if (targetTrack.height) QUAL.activeHeight = targetTrack.height;
+      }
     } else if (QUAL.mode === 'target' || QUAL.mode === 'saver') {
       var maxH = QUAL.mode === 'saver' ? 480 : (QUAL.targetH || 720);
+      var cand = tracks.filter(function (t) { return t.height <= maxH; });
+      var minTrackH = tracks.reduce(function (m, t) { return Math.min(m, t.height || 9999); }, 9999);
+      var effCapH = cand.length ? maxH : minTrackH;
       p.configure({
         abr: {
           enabled: true,
-          restrictions: { maxHeight: maxH }
+          restrictions: { maxHeight: effCapH }
         }
       });
+      var curAct = tracks.find(function (t) { return t.active; });
+      if (curAct && curAct.height > effCapH) {
+        var pickT = (cand.length ? cand : tracks).slice().sort(function (a, b) {
+          return (b.height - a.height) || (b.bandwidth - a.bandwidth);
+        })[0];
+        if (pickT) {
+          p.selectVariantTrack(pickT, true);
+          if (pickT.height) QUAL.activeHeight = pickT.height;
+        }
+      }
       applyClientEcoMode(maxH);
     }
   } catch (e) {}
@@ -1717,12 +1789,18 @@ function play(ch, opts) {
 
   var kind = kindOf(currentUrl);
   var isHttpOnHttps = location.protocol === 'https:' && /^http:\/\//i.test(currentUrl);
+  var isGithubWrapper = /raw\.githubusercontent\.com|gist\.githubusercontent\.com/i.test(currentUrl);
   var isTsOrStalker = kind === 'mpegts' || kind === 'flv' || /\/play\/live\.php\b/i.test(currentUrl);
-  // Hanya gunakan forceServerQ jika sudah diverifikasi lewat preflight probe
+  // Hanya gunakan forceServerQ jika diminta lewat opts atau mode hemat untuk stream TS langsung
   var wantServerQ = (opts.forceServerQ && !opts.noTranscode) ? opts.forceServerQ : 0;
-  var useProxy = !!(wantServerQ || opts.viaProxy || currentNeedsHeaders || isVod || isTsOrStalker || isHttpOnHttps) && kind !== 'unsupported';
+  if (!wantServerQ && !opts.noTranscode && !isVod && isTsOrStalker && !currentClearKeys && !ch._noServerTranscode) {
+    if (QUAL.mode === 'saver') wantServerQ = 480;
+    else if (QUAL.mode === 'target' && (QUAL.targetH === 360 || QUAL.targetH === 480 || QUAL.targetH === 720)) wantServerQ = QUAL.targetH;
+  }
+  var useProxy = !!(wantServerQ || opts.viaProxy || currentNeedsHeaders || isVod || isTsOrStalker || isGithubWrapper || isHttpOnHttps) && kind !== 'unsupported';
   E.viaProxy = useProxy;
   E.serverTranscode = !!wantServerQ;
+  if (!wantServerQ) E.rebufferCount = 0;
   QUAL.serverQ = wantServerQ;
   var streamObj = {
     url: currentUrl,
@@ -1835,7 +1913,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
   el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
-    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.50 · Token #' + E.token + '</small>';
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.51 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
@@ -1916,6 +1994,31 @@ el.video.addEventListener('waiting', function () {
   if (healBufferGap()) { setBusy(false); return; }
   setBusy(true);
   var token = E.token;
+
+  // Smart Auto-SD Downshift saat Live TV mengalami rebuffering setelah sempat jalan:
+  if (E.hasPlayed && S.playing && !S.playing.isVod && !S.playing.isMovie) {
+    E.rebufferCount = (E.rebufferCount || 0) + 1;
+    // 1. Jika stream punya banyak level kualitas, turunkan ke level SD terendah (<= 360p)
+    if (QUAL.levels && QUAL.levels.length > 1 && QUAL.mode === 'auto') {
+      var lowSdIdx = pickLevelForTarget(QUAL.levels, 360);
+      if (E.hls && lowSdIdx >= 0) {
+        E.hls.autoLevelCapping = lowSdIdx;
+        E.hls.nextLevel = lowSdIdx;
+      } else if (E.shaka) {
+        try { E.shaka.configure({ abr: { enabled: true, restrictions: { maxHeight: 360, maxBandwidth: 900000 } } }); } catch (e) {}
+      } else if (E.dash && lowSdIdx >= 0) {
+        try { E.dash.setQualityFor('video', lowSdIdx, true); } catch (e) {}
+      }
+    } else if (E.rebufferCount >= 2 && !E.serverTranscode && !S.playing._noServerTranscode && !S.playing.clearKeys && kindOf(S.playing.url) !== 'dash') {
+      // 2. Jika stream hanya punya 1 kualitas FHD/HD (single-bitrate) dan macet >= 2x, otomatis kompres ke 480p SD di server!
+      var realH = (el.video && el.video.videoHeight) || QUAL.activeHeight || 1080;
+      if (realH > 576) {
+        toast('🍃 Sinyal HD terlalu berat, otomatis beralih ke versi SD (480p) agar lancar…');
+        play(S.playing, { retry: true, viaProxy: true, forceServerQ: 480, sourceIndex: S.playing._sourceIndex });
+        return;
+      }
+    }
+  }
 
   // Smart Anti-Stutter Rebuffer Cushion:
   // Saat stream live kehabisan buffer, tahan selama ~1-2 detik hingga terkumpul minimal 2.5 detik buffer
@@ -2055,7 +2158,7 @@ function pickLevelForTarget(levels, maxH) {
     var br = levels[i].bitrate || 0;
     var score = h || Math.round(br / 2000);
     if (score > 0 && score < minScore) { minScore = score; minIdx = levels[i].index; }
-    var maxBr = maxH <= 360 ? 700000 : maxH <= 480 ? 1200000 : maxH <= 720 ? 2800000 : 99999999;
+    var maxBr = maxH <= 360 ? 700000 : maxH <= 480 ? 1200000 : maxH <= 576 ? 2100000 : maxH <= 720 ? 2800000 : 99999999;
     if ((h > 0 && h <= maxH) || (!h && br > 0 && br <= maxBr)) {
       if (score >= bestScore) { bestScore = score; bestIdx = levels[i].index; }
     }
@@ -2084,9 +2187,25 @@ function applyClientEcoMode(targetH) {
 
 function applyHlsQuality(hls) {
   if (!hls) return;
+  var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
   if (QUAL.mode === 'auto') {
-    hls.autoLevelCapping = -1;
-    hls.nextLevel = -1;
+    if (!isVod && QUAL.levels && QUAL.levels.length > 1) {
+      // Pada Live TV di mode Auto, pilih level SD (<= 576p, mis. 360p/432p/480p/540p) seperti OTT Navigator agar anti-buffering
+      var sdIdx = pickLevelForTarget(QUAL.levels, 576);
+      if (sdIdx >= 0) {
+        hls.autoLevelCapping = sdIdx;
+        if (hls.currentLevel < 0 || (hls.levels[hls.currentLevel] && hls.levels[hls.currentLevel].height > 576)) {
+          hls.nextLevel = sdIdx;
+          hls.loadLevel = sdIdx;
+        }
+      } else {
+        hls.autoLevelCapping = -1;
+        hls.nextLevel = -1;
+      }
+    } else {
+      hls.autoLevelCapping = -1;
+      hls.nextLevel = -1;
+    }
     applyClientEcoMode(0);
   } else if (QUAL.mode === 'saver') {
     var capIdx = pickLevelForTarget(QUAL.levels, 480);
@@ -2113,21 +2232,28 @@ function applyHlsQuality(hls) {
 function applyDashQuality(p) {
   if (!p) return;
   try {
+    var isVod = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
     if (QUAL.mode === 'auto') {
-      p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: -1 } } } });
+      if (!isVod && QUAL.levels && QUAL.levels.length > 1) {
+        p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: 2100 } } } });
+        var sdIdx = pickLevelForTarget(QUAL.levels, 576);
+        if (sdIdx >= 0) p.setQualityFor('video', sdIdx, true);
+      } else {
+        p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: -1 } } } });
+      }
       applyClientEcoMode(0);
     } else if (QUAL.mode === 'saver') {
       p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true }, maxBitrate: { video: 1000 } } } });
       var idx = pickLevelForTarget(QUAL.levels, 480);
-      if (idx >= 0) p.setQualityFor('video', idx);
+      if (idx >= 0) p.setQualityFor('video', idx, true);
       applyClientEcoMode(480);
     } else if (QUAL.mode === 'native' && QUAL.level >= 0) {
       p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
-      p.setQualityFor('video', QUAL.level);
+      p.setQualityFor('video', QUAL.level, true);
     } else if (QUAL.mode === 'target' && QUAL.targetH > 0) {
       var tIdx = pickLevelForTarget(QUAL.levels, QUAL.targetH);
       p.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
-      if (tIdx >= 0) p.setQualityFor('video', tIdx);
+      if (tIdx >= 0) p.setQualityFor('video', tIdx, true);
       applyClientEcoMode(QUAL.targetH);
     }
   } catch (e) {}

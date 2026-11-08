@@ -1729,7 +1729,8 @@ async function handle(req, res) {
       throw fail(400, e.message);
     }
     const isSegReq = url.searchParams.get('seg') === '1';
-    const isTsLike = !isSegReq && isDirectStreamUrl(rawU);
+    const isM3u8Query = /[?&](extension|output|type)=m3u8\b/i.test(rawU);
+    const isTsLike = !isSegReq && !isM3u8Query && isDirectStreamUrl(rawU);
     const isStalker = /\/play\/live\.php\b/i.test(rawU);
     const cleanRawPath = rawU.split(/[?#]/)[0];
 
@@ -1755,8 +1756,8 @@ async function handle(req, res) {
     const VLC_UA = 'VLC/3.0.20 LibVLC/3.0.20';
     const LAVF_UA = 'Lavf/60.16.100';
     const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-    const primaryUa = ua || (isTsLike ? VLC_UA : CHROME_UA);
-    const fallbackUa = ua ? '' : (isTsLike ? LAVF_UA : VLC_UA);
+    const primaryUa = ua || ((isTsLike || isStalker) ? VLC_UA : CHROME_UA);
+    const fallbackUa = ua ? '' : ((isTsLike || isStalker) ? LAVF_UA : VLC_UA);
 
     let clientClosed = false;
     let currentAc = new AbortController();
@@ -1923,7 +1924,20 @@ async function handle(req, res) {
       }
 
       if (!preloadedXtreamM3u8) {
-        let attempt = await connectUpstream(primaryUa, false);
+        let attempt = null;
+        // Untuk Stalker extension=m3u8, gunakan URL edge hasil redirect yang sudah di-cache agar tidak memicu MAC lock saat refresh playlist
+        if (isStalker && isM3u8Query && cachedDirect && cachedDirect.url && (Date.now() - cachedDirect.ts < 2 * 3600 * 1000)) {
+          chosenUa = cachedDirect.ua || primaryUa;
+          chosenSendIp = !!cachedDirect.sendIp;
+          attempt = await connectUpstream(chosenUa, chosenSendIp, cachedDirect.url);
+          if (!attempt.res || !attempt.res.ok) {
+            try { if (attempt.res && attempt.res.body) attempt.res.body.cancel(); } catch (e) {}
+            attempt = null;
+          }
+        }
+        if (!attempt) {
+          attempt = await connectUpstream(primaryUa, false);
+        }
         upRes = attempt.res;
         target = attempt.target;
         // Jika kena 429 Connection limit reached (panel Xtream masih melepas sesi channel sebelumnya), tunggu 1.1 detik lalu coba lagi
@@ -1987,72 +2001,138 @@ async function handle(req, res) {
       activeStreamLocks.set('direct:' + rawU, { url: target, ua: chosenUa, sendIp: chosenSendIp, ts: Date.now() });
     }
 
-    const ct = (upRes.headers.get('content-type') || '').toLowerCase();
+    let ct = (upRes.headers.get('content-type') || '').toLowerCase();
     if (isTsLike && ct.includes('text/html')) {
       try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
       res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify({ error: 'Token stream dikunci ke IP perangkat asal atau VLC masih terbuka' }));
     }
-    const isM3u8 = !preloadedXtreamM3u8 && (ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname));
-    const suffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
+    const isM3u8 = !preloadedXtreamM3u8 && (ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname) || isM3u8Query);
+    const baseSuffix = (ua ? '&ua=' + encodeURIComponent(ua) : '') +
       (ref ? '&ref=' + encodeURIComponent(ref) : '') +
-      (org ? '&org=' + encodeURIComponent(org) : '') +
-      '&seg=1';
-    const wrapUrl = (rel) => {
+      (org ? '&org=' + encodeURIComponent(org) : '');
+    const wrapUrl = (rel, isVariant) => {
       try {
         const absUrl = new URL(rel, target);
-        // Jika target memiliki query params dan rel tidak punya, wariskan query params target
-        if (target.search && !absUrl.search) {
+        // Wariskan query params token CDN dari target ke segmen jika target bukan URL router (mac/channel/extension)
+        if (target.search && !absUrl.search && !/[?&](extension|type|output|mac|channel|stream)=/i.test(target.search)) {
           absUrl.search = target.search;
         }
-        return '/api/stream?u=' + encodeURIComponent(absUrl.toString()) + suffix;
+        const isChildM3u8 = isVariant || /\.m3u8($|\?)/i.test(absUrl.pathname) || /[?&](extension|output|type)=m3u8\b/i.test(absUrl.search);
+        return '/api/stream?u=' + encodeURIComponent(absUrl.toString()) + baseSuffix + (isChildM3u8 ? '' : '&seg=1');
       } catch (e) { return rel; }
     };
 
+    let isUnwrappedLiveTs = false;
     if (isM3u8) {
-      if (q && forceTranscode && HAS_FFMPEG && activeFfmpegCount < MAX_FFMPEG) {
-        try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
-        res.writeHead(200, {
-          'Content-Type': 'video/mp2t',
-          'Cache-Control': 'no-store',
-          'X-Accel-Buffering': 'no',
-          ...streamCors
-        });
-        const ff = startFfmpegPipe(q, target.toString(), chosenUa);
-        if (ff) return;
-      }
-      const buf = Buffer.from(await upRes.arrayBuffer());
-      const bodyText = buf.toString('utf8');
-      if (bodyText.trimStart().startsWith('#EXTM3U')) {
-        const rewritten = bodyText.split(/\r?\n/).map((line) => {
-          const t = line.trim();
-          if (!t) return line;
-          if (t.startsWith('#')) {
-            return line.replace(/URI=["']([^"']+)["']/gi, (_, u1) => 'URI="' + wrapUrl(u1) + '"');
+      let buf = Buffer.from(await upRes.arrayBuffer());
+      let bodyText = buf.toString('utf8');
+      const rawLines = bodyText.split(/\r?\n/);
+      const urlLines = rawLines.map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+
+      // Auto-Unwrap untuk file .m3u8 wrapper 1-baris (mis. raw.githubusercontent.com -> Stalker / Xtream / Live TS)
+      if (bodyText.trimStart().startsWith('#EXTM3U') && urlLines.length === 1 && !/#EXT-X-MEDIA-SEQUENCE/i.test(bodyText)) {
+        try {
+          const innerRaw = new URL(urlLines[0], target).toString();
+          const innerTarget = await assertPublicUrl(innerRaw);
+          const innerIsStalker = /\/play\/live\.php\b/i.test(innerRaw);
+          const innerIsM3u8Q = /[?&](extension|output|type)=m3u8\b/i.test(innerRaw);
+          const innerIsDirect = !innerIsM3u8Q && isDirectStreamUrl(innerRaw);
+          const innerUa = ua || ((innerIsStalker || innerIsDirect) ? VLC_UA : CHROME_UA);
+          const innerCached = activeStreamLocks.get('direct:' + innerRaw);
+          let innerAtt = null;
+
+          if (innerIsStalker && innerCached && innerCached.url && (Date.now() - innerCached.ts < 2 * 3600 * 1000)) {
+            innerAtt = await connectUpstream(innerCached.ua || innerUa, !!innerCached.sendIp, innerCached.url);
+            if (!innerAtt.res || !innerAtt.res.ok) {
+              try { if (innerAtt.res && innerAtt.res.body) innerAtt.res.body.cancel(); } catch (e) {}
+              innerAtt = null;
+            }
           }
-          return wrapUrl(t);
-        }).join('\n');
-        const outBuf = Buffer.from(rewritten, 'utf8');
-        res.writeHead(200, {
-          'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-          'Content-Length': outBuf.length,
+          if (!innerAtt) {
+            if (innerIsDirect) {
+              const uLockKey = 'unwrap:' + rawU;
+              if (activeStreamLocks.has(uLockKey)) {
+                try { activeStreamLocks.get(uLockKey).kill(); } catch (e) {}
+                activeStreamLocks.delete(uLockKey);
+                await new Promise((r) => setTimeout(r, 650));
+              }
+              activeStreamLocks.set(uLockKey, lockObj);
+              req.on('close', () => {
+                if (activeStreamLocks.get(uLockKey) === lockObj) activeStreamLocks.delete(uLockKey);
+              });
+            }
+            innerAtt = await connectUpstream(innerUa, false, innerTarget);
+          }
+          if (innerAtt && innerAtt.res && (innerAtt.res.ok || innerAtt.res.status === 206)) {
+            upRes = innerAtt.res;
+            target = innerAtt.target || innerTarget;
+            chosenUa = innerUa;
+            if (innerIsStalker && target && target.toString() !== innerTarget.toString()) {
+              activeStreamLocks.set('direct:' + innerRaw, { url: target, ua: innerUa, sendIp: false, ts: Date.now() });
+            }
+            ct = (upRes.headers.get('content-type') || '').toLowerCase();
+            if (ct.includes('mpegurl') || /\.m3u8($|\?)/i.test(target.pathname) || innerIsM3u8Q) {
+              buf = Buffer.from(await upRes.arrayBuffer());
+              bodyText = buf.toString('utf8');
+            } else {
+              isUnwrappedLiveTs = true;
+            }
+          } else if (innerAtt && innerAtt.res && innerAtt.res.body) {
+            try { innerAtt.res.body.cancel(); } catch (e) {}
+          }
+        } catch (e) {
+          console.warn('[Stream Relay] Wrapper unwrap error:', e.message);
+        }
+      }
+
+      if (!isUnwrappedLiveTs) {
+        if (q && forceTranscode && HAS_FFMPEG && activeFfmpegCount < MAX_FFMPEG) {
+          try { if (upRes.body) upRes.body.cancel(); } catch (e) {}
+          res.writeHead(200, {
+            'Content-Type': 'video/mp2t',
+            'Cache-Control': 'no-store',
+            'X-Accel-Buffering': 'no',
+            ...streamCors
+          });
+          const ff = startFfmpegPipe(q, target.toString(), chosenUa);
+          if (ff) return;
+        }
+        if (bodyText.trimStart().startsWith('#EXTM3U')) {
+          let nextIsVariant = false;
+          const rewritten = bodyText.split(/\r?\n/).map((line) => {
+            const t = line.trim();
+            if (!t) return line;
+            if (t.startsWith('#')) {
+              if (/^#EXT-X-STREAM-INF\b/i.test(t)) nextIsVariant = true;
+              return line.replace(/URI=["']([^"']+)["']/gi, (_, u1) => 'URI="' + wrapUrl(u1, false) + '"');
+            }
+            const v = nextIsVariant;
+            nextIsVariant = false;
+            return wrapUrl(t, v);
+          }).join('\n');
+          const outBuf = Buffer.from(rewritten, 'utf8');
+          res.writeHead(200, {
+            'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
+            'Content-Length': outBuf.length,
+            'Cache-Control': 'no-store',
+            'X-Accel-Buffering': 'no',
+            ...streamCors
+          });
+          return res.end(outBuf);
+        }
+        res.writeHead(upRes.status, {
+          'Content-Type': ct || 'application/octet-stream',
           'Cache-Control': 'no-store',
           'X-Accel-Buffering': 'no',
           ...streamCors
         });
-        return res.end(outBuf);
+        return res.end(buf);
       }
-      res.writeHead(upRes.status, {
-        'Content-Type': ct || 'application/octet-stream',
-        'Cache-Control': 'no-store',
-        'X-Accel-Buffering': 'no',
-        ...streamCors
-      });
-      return res.end(buf);
     }
 
     const isSeg = isSegReq;
-    const isLiveTs = Boolean(preloadedXtreamM3u8) || (!isSeg && !upRes.headers.get('content-length') && !req.headers['range'] && (isTsLike || ct.includes('mp2t')));
+    const isLiveTs = isUnwrappedLiveTs || Boolean(preloadedXtreamM3u8) || (!isSeg && !upRes.headers.get('content-length') && !req.headers['range'] && (isTsLike || ct.includes('mp2t')));
     if (isLiveTs) {
       res.writeHead(200, {
         'Content-Type': 'video/mp2t',
