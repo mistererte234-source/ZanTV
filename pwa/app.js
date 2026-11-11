@@ -1029,6 +1029,21 @@ function healBufferGap() {
     if (!b || !b.length) return false;
     var cur = el.video.currentTime;
 
+    // VOD / film: hanya lompati lubang kecil (maks 3 detik). Lubang besar artinya penonton sengaja
+    // menggeser ke bagian yang belum diunduh; kalau "disembuhkan", player malah melempar balik
+    // ke posisi lama (geser mundur tidak pernah berhasil).
+    if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
+      for (var j = 0; j < b.length; j++) {
+        var hole = b.start(j) - cur;
+        if (hole > 0.15 && hole <= 3 && b.end(j) - b.start(j) > 0.2) {
+          el.video.currentTime = b.start(j) + 0.08;
+          el.video.play().catch(function () {});
+          return true;
+        }
+      }
+      return false;
+    }
+
     // Sambung celah buffer (buffer gap) jika playhead macet tepat di lubang kosong antar segmen
     if (b.length > 1) {
       var lastStart = b.start(b.length - 1);
@@ -1068,10 +1083,13 @@ function startHls(url, token) {
       abrEwmaDefaultEstimate: isVod ? 2500000 : 800000,
       // Deep Smooth Buffer Engine: Matikan lowLatencyMode pada HLS standar agar tidak patah-patah / menguras buffer
       lowLatencyMode: false,
-      backBufferLength: isVod ? 90 : 30,
-      maxBufferLength: isVod ? 90 : 45,
-      maxMaxBufferLength: isVod ? 180 : 90,
-      maxBufferSize: (isVod ? 120 : 80) * 1024 * 1024,
+      // VOD: mulai mengunduh langsung di posisi lanjut-nonton, dan simpan buffer belakang lebih panjang
+      // supaya geser mundur / maju di area yang sudah terunduh tidak perlu mengunduh ulang.
+      startPosition: (isVod && E.startAt > 0) ? E.startAt : -1,
+      backBufferLength: isVod ? 240 : 30,
+      maxBufferLength: isVod ? 120 : 45,
+      maxMaxBufferLength: isVod ? 240 : 90,
+      maxBufferSize: (isVod ? 150 : 80) * 1024 * 1024,
       maxBufferHole: 0.8,
       highBufferWatchdogPeriod: 2,
       nudgeOffset: 0.15,
@@ -1680,6 +1698,23 @@ function updateVideoAspect() {
 function play(ch, opts) {
   opts = opts || {};
   if (!ch) return;
+  /* Memori tontonan (ZanResume): catat posisi film yang sedang jalan sebelum mesinnya dibongkar,
+     lalu cari posisi terakhir film yang akan diputar. Berlaku juga saat sambung ulang / ganti server,
+     jadi film tidak lagi balik ke menit 0. */
+  var RES = window.ZanResume;
+  var prevCh = S.playing;
+  var chIsVod = !!(ch.isVod || ch.isMovie);
+  if (RES && prevCh && (prevCh.isVod || prevCh.isMovie)) {
+    RES.record(prevCh, el.video.currentTime, el.video.duration, true);
+  }
+  var freshOpen = !opts.retry && !(prevCh && RES && RES.keyFor(prevCh) && RES.keyFor(prevCh) === RES.keyFor(ch));
+  if (RES && chIsVod) {
+    if (opts.fromStart) RES.rewound(ch);
+    else if (!(opts.seekTime > 0)) {
+      var savedPos = RES.positionFor(ch);
+      if (savedPos > 0) opts.seekTime = savedPos;
+    }
+  }
   var token = ++E.token;
   console.log('[Player] play() invoked:', ch.name, 'isVod:', !!(ch.isVod || ch.isMovie), 'retry:', !!opts.retry, 'token:', token);
   if (!opts.retry) { E.retries = 0; E.hasPlayed = false; }
@@ -1769,17 +1804,32 @@ function play(ch, opts) {
     if (el.vodNextEpBtn) el.vodNextEpBtn.hidden = true;
   }
 
-  if (opts.seekTime && opts.seekTime > 0) {
+  E.startAt = 0;
+  hideResumeChip();
+  if (chIsVod && opts.seekTime && opts.seekTime > 0) {
     var targetSec = opts.seekTime;
     var seekApplied = false;
+    // hls.js memakai E.startAt sebagai startPosition: segmen pertama yang diunduh langsung segmen
+    // di menit tujuan, bukan awal film dulu baru lompat.
+    E.startAt = targetSec;
+    if (RES) RES.expect(ch, 30000);
     var applySeek = function () {
-      if (seekApplied) return;
-      if (el.video.duration && isFinite(el.video.duration) && el.video.duration > 0) {
-        seekApplied = true;
-        try { el.video.currentTime = Math.min(targetSec, el.video.duration - 1); } catch (e) {}
+      if (seekApplied || token !== E.token) {
         el.video.removeEventListener('loadedmetadata', applySeek);
         el.video.removeEventListener('canplay', applySeek);
-        toast('🍿 Melanjutkan tontonan dari menit ' + formatVodTime(targetSec));
+        return;
+      }
+      var dur = el.video.duration;
+      if (dur && isFinite(dur) && dur > 0) {
+        seekApplied = true;
+        el.video.removeEventListener('loadedmetadata', applySeek);
+        el.video.removeEventListener('canplay', applySeek);
+        var want = Math.min(targetSec, Math.max(0, dur - 5));
+        if (Math.abs(el.video.currentTime - want) > 2) {
+          try { el.video.currentTime = want; } catch (e) {}
+        }
+        if (RES) RES.release();
+        if (freshOpen) showResumeChip(want);
       }
     };
     el.video.addEventListener('loadedmetadata', applySeek);
@@ -1852,6 +1902,35 @@ function play(ch, opts) {
   });
 }
 
+/* Chip "Lanjut dari 32:10 · Dari awal" yang muncul beberapa detik setelah film dilanjutkan */
+var resumeChipTimer = null;
+function hideResumeChip() {
+  clearTimeout(resumeChipTimer);
+  var chip = document.getElementById('vodResumeChip');
+  if (chip) chip.hidden = true;
+}
+function showResumeChip(sec) {
+  var chip = document.getElementById('vodResumeChip');
+  var label = document.getElementById('vodResumeChipText');
+  if (!chip || !label) { toast('Melanjutkan dari ' + formatVodTime(sec)); return; }
+  label.textContent = 'Lanjut dari ' + formatVodTime(sec);
+  chip.hidden = false;
+  clearTimeout(resumeChipTimer);
+  resumeChipTimer = setTimeout(hideResumeChip, 9000);
+}
+(function () {
+  var btn = document.getElementById('vodResumeRestartBtn');
+  if (!btn) return;
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    hideResumeChip();
+    if (!S.playing) return;
+    if (window.ZanResume) window.ZanResume.rewound(S.playing);
+    try { el.video.currentTime = 0; } catch (err) {}
+    el.video.play().catch(function () {});
+  });
+})();
+
 function lockReason(info) {
   if (info.kind === 'drm') return 'drm';
   return '';
@@ -1913,7 +1992,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
   el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
-    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.51 · Token #' + E.token + '</small>';
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.52 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));
@@ -2076,6 +2155,10 @@ el.video.addEventListener('ended', function () {
 });
 function stopPlayback(opts) {
   opts = opts || {};
+  if (window.ZanResume && S.playing && (S.playing.isVod || S.playing.isMovie)) {
+    window.ZanResume.record(S.playing, el.video.currentTime, el.video.duration, true);
+  }
+  hideResumeChip();
   E.token++;
   destroyEngine();
   try {
@@ -2110,7 +2193,7 @@ function stopPlayback(opts) {
   if (el.vodNextEpBtn) el.vodNextEpBtn.hidden = true;
   if (el.vodScrubInput) el.vodScrubInput.value = 0;
   if (el.vodScrubProgress) el.vodScrubProgress.style.width = '0%';
-  if (el.vodScrubBuffer) el.vodScrubBuffer.style.width = '0%';
+  if (el.vodScrubBuffer) { el.vodScrubBuffer.style.width = '0%'; el.vodScrubBuffer.style.left = '0%'; }
   if (el.vodScrubThumb) el.vodScrubThumb.style.left = '0%';
   if (el.vodTimeCurrent) el.vodTimeCurrent.textContent = '00:00';
   if (el.vodTimeDuration) el.vodTimeDuration.textContent = '--:--';
@@ -2126,6 +2209,7 @@ function stopVod() {
 
 window.ZanTV = {
   playVod: function (vodCh, opts) { play(vodCh, opts); },
+  getPlaying: function () { return S.playing; },
   playChannel: play,
   updateVideoAspect: updateVideoAspect,
   stopPlayback: stopPlayback,
@@ -2860,10 +2944,122 @@ function togglePlay() {
 function syncPlay() {
   el.playIcon.innerHTML = el.video.paused ? '<path d="M7 5v14l12-7z"/>' : '<path d="M8 5v14M16 5v14"/>';
 }
+/* ------------------------------------------------------------------ */
+/* Volume: slider 0-100%, diingat antar sesi, tombol +/- dan roda mouse  */
+/* ------------------------------------------------------------------ */
+var VOL = { canSet: true, last: 1, osdTimer: null, popTimer: null };
 function syncMute() {
-  var m = el.video.muted || el.video.volume === 0;
-  el.muteIcon.innerHTML = m ? '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="m17 9 5 6M22 9l-5 6"/>' : '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/>';
+  var v = el.video.volume;
+  var m = el.video.muted || v === 0;
+  var spk = '<path d="M4 9v6h4l5 4V5L8 9z"/>';
+  el.muteIcon.innerHTML = m ? spk + '<path d="m17 9 5 6M22 9l-5 6"/>'
+    : (v < 0.5 ? spk + '<path d="M16 9a4 4 0 0 1 0 6"/>'
+      : spk + '<path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a8 8 0 0 1 0 11"/>');
+  var pct = m ? 0 : Math.round(v * 100);
+  var slider = document.getElementById('volSlider');
+  if (slider) {
+    if (document.activeElement !== slider || +slider.value !== pct) slider.value = pct;
+    slider.style.setProperty('--vol', pct + '%');
+    slider.setAttribute('aria-valuetext', pct + '%');
+  }
+  var btn = document.getElementById('muteBtn');
+  if (btn) btn.title = (m ? 'Suara mati' : 'Volume ' + pct + '%') + ' (M, ↑/↓ saat film, + / −)';
 }
+function showVolOsd() {
+  var osd = document.getElementById('volOsd');
+  if (!osd) return;
+  var m = el.video.muted || el.video.volume === 0;
+  var pct = m ? 0 : Math.round(el.video.volume * 100);
+  osd.innerHTML = '<span class="vol-osd-ic">' + (m ? '🔇' : (pct < 50 ? '🔉' : '🔊')) + '</span>' +
+    '<span class="vol-osd-bar"><i style="width:' + pct + '%"></i></span><span class="vol-osd-num">' + pct + '%</span>';
+  osd.hidden = false;
+  clearTimeout(VOL.osdTimer);
+  VOL.osdTimer = setTimeout(function () { osd.hidden = true; }, 1300);
+}
+function setVolume(x, quiet) {
+  x = Math.max(0, Math.min(1, Math.round(x * 100) / 100));
+  if (!VOL.canSet) {
+    // iPhone/iPad: Safari tidak mengizinkan halaman web mengatur volume, hanya bisu / tidak
+    el.video.muted = x === 0;
+    if (!quiet) toast('Di iPhone/iPad volume diatur lewat tombol fisik perangkat.');
+    return;
+  }
+  try { el.video.volume = x; } catch (e) {}
+  el.video.muted = x === 0;
+  if (x > 0) VOL.last = x;
+  LS.set('vol', x > 0 ? x : VOL.last);
+  syncMute();
+  if (!quiet) showVolOsd();
+}
+function stepVolume(d) {
+  var cur = el.video.muted ? 0 : el.video.volume;
+  setVolume(cur + d);
+  wakeUi();
+}
+function toggleMute() {
+  if (el.video.muted || el.video.volume === 0) {
+    el.video.muted = false;
+    if (el.video.volume === 0 && VOL.canSet) { try { el.video.volume = VOL.last || 0.5; } catch (e) {} }
+  } else {
+    el.video.muted = true;
+  }
+  syncMute();
+  showVolOsd();
+}
+(function initVolume() {
+  var v = el.video;
+  var wrap = document.getElementById('volWrap');
+  var slider = document.getElementById('volSlider');
+  var btn = document.getElementById('muteBtn');
+  var saved = +LS.get('vol', 1);
+  if (!(saved > 0 && saved <= 1)) saved = 1;
+  try {
+    v.volume = 0.5;
+    VOL.canSet = Math.abs(v.volume - 0.5) < 0.01;
+    v.volume = VOL.canSet ? saved : 1;
+  } catch (e) { VOL.canSet = false; }
+  VOL.last = saved;
+  if (wrap && !VOL.canSet) wrap.classList.add('vol-fixed');
+
+  var hoverCapable = !window.matchMedia || window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  function openPop() {
+    if (!wrap) return;
+    wrap.classList.add('is-open');
+    clearTimeout(VOL.popTimer);
+    VOL.popTimer = setTimeout(function () { wrap.classList.remove('is-open'); }, 3500);
+  }
+  if (btn) {
+    btn.addEventListener('click', function (e) {
+      // Layar sentuh: ketukan pertama membuka slider, ketukan berikutnya baru bisu / bunyi
+      if (!hoverCapable && VOL.canSet && wrap && !wrap.classList.contains('is-open')) {
+        e.stopPropagation();
+        openPop();
+        return;
+      }
+      toggleMute();
+      if (!hoverCapable) openPop();
+    });
+  }
+  if (slider) {
+    slider.addEventListener('input', function () {
+      setVolume((+slider.value || 0) / 100, true);
+      if (!hoverCapable) openPop();
+      wakeUi();
+    });
+    ['click', 'dblclick', 'touchstart', 'pointerdown'].forEach(function (ev) {
+      slider.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
+    });
+  }
+  if (wrap) {
+    wrap.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      stepVolume(e.deltaY < 0 ? 0.05 : -0.05);
+    }, { passive: false });
+    document.addEventListener('click', function (e) {
+      if (!wrap.contains(e.target)) wrap.classList.remove('is-open');
+    });
+  }
+})();
 
 function isFullscreen() {
   return !!(document.fullscreenElement || document.webkitFullscreenElement || document.body.classList.contains('stage-theater-fullscreen'));
@@ -3085,13 +3281,19 @@ document.addEventListener('keydown', function (e) {
   if (k === 'z' || k === 'Z') { e.preventDefault(); if (isVerticalVideo()) toggleFitMode(); return; }
   if (k === 'c' || k === 'C') { e.preventDefault(); setCcMode(CC.mode === 'off' ? 'id' : 'off'); return; }
   if (k === 's' || k === 'S' || k === 'ContextMenu') { e.preventDefault(); toggleFav(); return; }
-  if (k === 'm' || k === 'M') { el.video.muted = !el.video.muted; return; }
+  if (k === 'm' || k === 'M') { toggleMute(); return; }
+  if (k === '+' || k === '=') { e.preventDefault(); stepVolume(0.05); return; }
+  if (k === '-' || k === '_') { e.preventDefault(); stepVolume(-0.05); return; }
   if (k === 'MediaPlayPause') { togglePlay(); return; }
 
   /* Geser menit VOD / film jika sedang memutar VOD */
   if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
     if (k === 'ArrowLeft') { e.preventDefault(); if (typeof window.vodSeekBy === 'function') window.vodSeekBy(-10); return; }
     if (k === 'ArrowRight') { e.preventDefault(); if (typeof window.vodSeekBy === 'function') window.vodSeekBy(10); return; }
+    /* ↑ ↓ = volume selama fokus tidak sedang di daftar / grid */
+    if ((k === 'ArrowUp' || k === 'ArrowDown') && !(t.closest && t.closest('.row, .grp, .listpane, .groups, .moviepane, .vodpane, dialog'))) {
+      e.preventDefault(); stepVolume(k === 'ArrowUp' ? 0.05 : -0.05); return;
+    }
   }
 
   var inStage = el.stage.contains(t) || isFullscreen();
@@ -3105,6 +3307,10 @@ document.addEventListener('keydown', function (e) {
       e.preventDefault();
       if (bi >= 0 && bi < btns.length) btns[bi].focus(); else el.stage.focus();
       return;
+    }
+    /* Saat film / VOD: ↑ ↓ mengatur volume (seperti Netflix), bukan pindah channel */
+    if (S.playing && (S.playing.isVod || S.playing.isMovie) && (k === 'ArrowUp' || k === 'ArrowDown')) {
+      e.preventDefault(); stepVolume(k === 'ArrowUp' ? 0.05 : -0.05); return;
     }
     if (k === 'ArrowUp') { e.preventDefault(); zap(1); return; }
     if (k === 'ArrowDown') { e.preventDefault(); zap(-1); return; }
@@ -3200,7 +3406,6 @@ el.search.addEventListener('input', debounce(function () {
 $('#playBtn').addEventListener('click', togglePlay);
 $('#prevBtn').addEventListener('click', function () { zap(-1); });
 $('#nextChBtn').addEventListener('click', function () { zap(1); });
-$('#muteBtn').addEventListener('click', function () { el.video.muted = !el.video.muted; if (!el.video.muted && el.video.volume === 0) el.video.volume = 1; });
 if (el.favBtn) el.favBtn.addEventListener('click', toggleFav);
 $('#fsBtn').addEventListener('click', toggleFullscreen);
 var wm = $('#stageWatermark');
@@ -3319,12 +3524,29 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
 /* ------------------------------------------------------------------ */
 (function initVodScrubber() {
   var isScrubbingVod = false;
+  var seekTarget = -1;     // posisi tujuan yang belum dikirim ke <video> (-1 = tidak ada)
+  var seekTimer = null;
+  var lastSeekAt = 0;
+  var scrubTip = document.getElementById('vodScrubTip');
+  var scrubWrap = document.getElementById('vodScrubWrap');
+
+  function isBufferedAt(t) {
+    try {
+      var b = el.video.buffered;
+      for (var i = 0; i < b.length; i++) {
+        if (t >= b.start(i) - 0.2 && t <= b.end(i) - 0.4) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
 
   function updateVodScrubberUi(cur, dur) {
     if (!dur || !isFinite(dur) || dur <= 0) {
       if (el.vodTimeDuration) el.vodTimeDuration.textContent = '--:--';
       return;
     }
+    // Selama masih ada tujuan geser yang menunggu, tampilkan tujuan itu (bukan posisi lama)
+    if (seekTarget >= 0) cur = seekTarget;
     var pct = Math.max(0, Math.min(100, (cur / dur) * 100));
     if (!isScrubbingVod) {
       if (el.vodScrubInput) el.vodScrubInput.value = pct;
@@ -3339,9 +3561,13 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
         for (var i = el.video.buffered.length - 1; i >= 0; i--) {
           var bStart = el.video.buffered.start(i);
           var bEnd = el.video.buffered.end(i);
-          if (bStart <= cur && cur <= bEnd) {
-            var bufPct = Math.max(0, Math.min(100, (bEnd / dur) * 100));
-            el.vodScrubBuffer.style.width = bufPct + '%';
+          if (bStart <= cur + 0.5 && cur <= bEnd) {
+            // Tampilkan rentang yang benar-benar tersimpan (termasuk buffer belakang),
+            // supaya kelihatan area mana yang bisa digeser tanpa menunggu.
+            var fromPct = Math.max(0, Math.min(100, (bStart / dur) * 100));
+            var toPct = Math.max(0, Math.min(100, (bEnd / dur) * 100));
+            el.vodScrubBuffer.style.left = fromPct + '%';
+            el.vodScrubBuffer.style.width = Math.max(0, toPct - fromPct) + '%';
             break;
           }
         }
@@ -3349,13 +3575,54 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
     }
   }
 
+  function commitSeek(t) {
+    clearTimeout(seekTimer); seekTimer = null;
+    seekTarget = -1;
+    lastSeekAt = Date.now();
+    try { el.video.currentTime = t; } catch (e) {}
+  }
+
+  /* Semua geser menit lewat satu pintu:
+     - Tujuan sudah ada di buffer  -> langsung lompat (instan, tanpa unduh).
+     - Tujuan belum ada di buffer  -> tunggu 200 ms tanpa geseran baru, lalu lompat SATU kali.
+       Menekan panah 6x cepat jadi satu permintaan +60 detik, bukan enam permintaan yang saling membatalkan. */
+  function vodSeekTo(t, o) {
+    o = o || {};
+    var dur = el.video.duration;
+    if (!el.video || !isFinite(dur) || dur <= 0) return;
+    t = Math.max(0, Math.min(dur - 1, t));
+    if (o.user && t < 10 && window.ZanResume && S.playing) window.ZanResume.rewound(S.playing);
+    seekTarget = t;
+    updateVodScrubberUi(t, dur);
+    clearTimeout(seekTimer); seekTimer = null;
+    if (o.now || isBufferedAt(t)) commitSeek(t);
+    else seekTimer = setTimeout(function () { commitSeek(t); }, 200);
+    wakeUi();
+  }
+  window.vodSeekTo = vodSeekTo;
+
   window.vodSeekBy = function (deltaSec) {
     if (!el.video || !isFinite(el.video.duration) || el.video.duration <= 0) return;
-    var newTime = Math.max(0, Math.min(el.video.duration - 1, el.video.currentTime + deltaSec));
-    try { el.video.currentTime = newTime; } catch (e) {}
-    updateVodScrubberUi(newTime, el.video.duration);
-    wakeUi();
+    var base = seekTarget >= 0 ? seekTarget : el.video.currentTime;
+    vodSeekTo(base + deltaSec, { user: true });
   };
+
+  function showScrubTip(pct, dur) {
+    if (!scrubTip || !dur || !isFinite(dur)) return;
+    pct = Math.max(0, Math.min(100, pct));
+    scrubTip.textContent = formatVodTime((pct / 100) * dur);
+    scrubTip.style.left = pct + '%';
+    scrubTip.hidden = false;
+  }
+  function hideScrubTip() { if (scrubTip) scrubTip.hidden = true; }
+
+  if (scrubWrap) {
+    scrubWrap.addEventListener('mousemove', function (e) {
+      var r = scrubWrap.getBoundingClientRect();
+      if (r.width > 0) showScrubTip(((e.clientX - r.left) / r.width) * 100, el.video.duration);
+    });
+    scrubWrap.addEventListener('mouseleave', function () { if (!isScrubbingVod) hideScrubTip(); });
+  }
 
   if (el.vodScrubInput) {
     el.vodScrubInput.addEventListener('input', function () {
@@ -3367,6 +3634,13 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
         if (el.vodScrubProgress) el.vodScrubProgress.style.width = pct + '%';
         if (el.vodScrubThumb) el.vodScrubThumb.style.left = pct + '%';
         if (el.vodTimeCurrent) el.vodTimeCurrent.textContent = formatVodTime(cur);
+        showScrubTip(pct, dur);
+        // Selama jari/mouse masih menyeret di area yang sudah ter-buffer, gambar ikut bergerak langsung.
+        if (isBufferedAt(cur) && Date.now() - lastSeekAt > 90) {
+          lastSeekAt = Date.now();
+          try { el.video.currentTime = cur; } catch (e) {}
+        }
+        wakeUi();
       }
     });
 
@@ -3376,16 +3650,15 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
       var dur = el.video.duration;
       if (dur && isFinite(dur) && dur > 0) {
         var pct = parseFloat(el.vodScrubInput.value) || 0;
-        var newTime = (pct / 100) * dur;
-        try { el.video.currentTime = newTime; } catch (e) {}
-        updateVodScrubberUi(newTime, dur);
-        wakeUi();
+        vodSeekTo((pct / 100) * dur, { now: true, user: true });
       }
+      if (!scrubWrap || !scrubWrap.matches(':hover')) hideScrubTip();
     }
 
     el.vodScrubInput.addEventListener('change', commitVodSeek);
     el.vodScrubInput.addEventListener('mouseup', commitVodSeek);
     el.vodScrubInput.addEventListener('touchend', commitVodSeek);
+    el.vodScrubInput.addEventListener('touchcancel', commitVodSeek);
   }
 
   if (el.vodRewindBtn) {
@@ -3405,10 +3678,14 @@ if (!document.pictureInPictureEnabled) $('#pipBtn').hidden = true;
     if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
       updateVodScrubberUi(el.video.currentTime, el.video.duration);
       renderVodSubtitleCue(el.video.currentTime);
-      if (window.ZanMovie && typeof window.ZanMovie.onPlaybackProgress === 'function') {
-        window.ZanMovie.onPlaybackProgress(el.video.currentTime, el.video.duration);
-      }
     }
+  });
+  // Video diganti / dimuat ulang: buang geseran yang masih menunggu supaya tidak nyasar ke film berikutnya
+  el.video.addEventListener('emptied', function () {
+    clearTimeout(seekTimer); seekTimer = null;
+    seekTarget = -1;
+    isScrubbingVod = false;
+    hideScrubTip();
   });
   el.video.addEventListener('durationchange', function () {
     if (S.playing && (S.playing.isVod || S.playing.isMovie)) {
@@ -4326,6 +4603,7 @@ function onLoggedIn(user) {
   $('#acctLabel').textContent = user.name;
   S.activeId = LS.get('active', null);
   syncBlocked();
+  if (window.ZanResume) window.ZanResume.pull(true);
   fetchPlaylists(true);
   fetchEPG();
   sendPresence();

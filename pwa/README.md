@@ -30,7 +30,10 @@ Taruh folder ini di repo (misalnya `F:/ZanTV/pwa`), lalu di Vercel pilih **Root 
 | Enter | Putar / layar penuh |
 | F | Layar penuh |
 | S | Favorit |
-| M | Suara |
+| M | Suara mati / nyala |
+| + / − | Volume naik / turun (di mana saja) |
+| ↑ / ↓ saat film/VOD | Volume naik / turun |
+| ← / → saat film/VOD | Mundur / maju 10 detik (ditekan berkali-kali = dijumlahkan) |
 | / | Cari |
 Di HP: geser naik/turun di video untuk ganti channel, ketuk dua kali untuk layar penuh.
 
@@ -57,3 +60,8 @@ Hasil audit 176 channel: 117 balas HTTP 200, semuanya mengirim header CORS,
 98 di antaranya HTTPS. Yang bisa diputar di browser tanpa header tambahan: 71.
 Tiga hal yang harus dipenuhi agar jalan di web: HTTP 200, ada header
 `Access-Control-Allow-Origin`, dan URL `https://` (bukan `http://`).
+
+## Memori tontonan (v1.7.52)
+- Posisi terakhir film, episode series, dan short drama disimpan otomatis (`zan-resume.js`): di perangkat (localStorage) dan di akun (`/api/progress`, berkas `progress.json` di folder data server), jadi lanjut nonton juga berlaku antar laptop dan HP.
+- Film dianggap tamat di 5% terakhir (maksimal 5 menit) dan hilang dari "Lanjut Nonton". Series otomatis membuka episode berikutnya.
+- Volume (0-100%) diingat per perangkat. Di iPhone/iPad volume tetap lewat tombol fisik karena Safari tidak mengizinkan halaman web mengaturnya.

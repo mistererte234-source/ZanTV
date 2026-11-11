@@ -490,6 +490,8 @@
       logo: ep.cover || S.currentDrama.cover || 'icons/icon-192.png',
       isVod: true,
       isVertical: true,
+      vodKey: 'd:' + (S.currentDrama.provider || S.provider || '') + ':' + S.currentDrama.id + ':' + (ep.episode || (index + 1)),
+      resumeMeta: { kind: 'drama', title: (S.currentDrama.title || 'Drama') + ' - Ep ' + S.activeEpNum },
       vodDrama: S.currentDrama,
       vodEp: ep,
       vodIndex: index,

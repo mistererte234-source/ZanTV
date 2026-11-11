@@ -663,6 +663,48 @@ async function autoLoadEpgUrl(u) {
 /* ---------------- log aktivitas ---------------- */
 const LOG_FILE = path.join(DATA_DIR, 'activity.jsonl');
 const LOG_DAYS = +(process.env.ZANTV_LOG_DAYS || 90);
+/* ---------------- memori tontonan VOD (Lanjut Nonton), per akun ---------------- */
+// Disimpan di berkas sendiri (bukan db.json) karena ditulis tiap beberapa detik saat orang menonton.
+const PROGRESS_FILE = path.join(DATA_DIR, 'progress.json');
+const PROGRESS_MAX = 80; // judul per akun, termasuk tanda hapus
+let progressDb = {};
+try { progressDb = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8')) || {}; } catch (e) { if (e.code !== 'ENOENT') console.warn('[ZanTV] progress.json tidak terbaca:', e.message); }
+let progressTimer = null;
+function flushProgress() {
+  progressTimer = null;
+  try {
+    const tmp = PROGRESS_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(progressDb), { mode: 0o600 });
+    fs.renameSync(tmp, PROGRESS_FILE);
+  } catch (e) { console.error('[ZanTV] Gagal menyimpan progress.json:', e.message); }
+}
+function saveProgressSoon() {
+  if (!progressTimer) progressTimer = setTimeout(flushProgress, 3000);
+}
+function progressStr(v, n) { return typeof v === 'string' ? v.slice(0, n) : ''; }
+function cleanProgress(b) {
+  const k = progressStr(b && b.k, 600);
+  const at = Math.round(+(b && b.at) || 0);
+  // Kunci selalu berawalan jenis ("m:", "d:", "n:"); ini juga menutup kunci aneh seperti __proto__
+  if (!/^[a-z]:./.test(k) || !(at > 0)) return null;
+  // Jam perangkat yang ngawur ke masa depan tidak boleh mengunci entri selamanya
+  const e = { k, at: Math.min(at, Date.now() + 60000) };
+  if (b.gone) { e.gone = 1; e.t = 0; e.d = 0; if (b.fin) e.fin = 1; return e; }
+  e.t = Math.max(0, Math.min(86400, Math.round(+b.t || 0)));
+  e.d = Math.max(0, Math.min(86400, Math.round(+b.d || 0)));
+  e.title = progressStr(b.title, 200);
+  e.poster = /^https?:\/\//i.test(progressStr(b.poster, 600)) ? progressStr(b.poster, 600) : '';
+  e.kind = b.kind === 'drama' ? 'drama' : 'movie';
+  e.movieUrl = progressStr(b.movieUrl, 600);
+  e.movieTitle = progressStr(b.movieTitle, 200);
+  e.isSeries = !!b.isSeries;
+  e.epTitle = progressStr(b.epTitle, 120);
+  e.provider = progressStr(b.provider, 40);
+  e.quality = progressStr(b.quality, 20);
+  e.server = progressStr(b.server, 20);
+  return e;
+}
+
 const presence = new Map(); // nama → { ts, channel, ip, device } (hanya di memori)
 
 function parseUA(ua) {
@@ -2728,6 +2770,27 @@ async function handle(req, res) {
     });
     return send(res, 204);
   }
+  /* memori tontonan: posisi terakhir tiap film / episode, ikut akun supaya sama di laptop dan HP */
+  if (p === '/api/progress' && method === 'GET') {
+    const mine = progressDb['u:' + me.name] || {};
+    return send(res, 200, { items: Object.keys(mine).map((k) => mine[k]) });
+  }
+  if (p === '/api/progress' && method === 'POST') {
+    const e = cleanProgress(await readBody(req, 8192));
+    if (!e) throw fail(400, 'Data tontonan tidak valid');
+    const mine = progressDb['u:' + me.name] || (progressDb['u:' + me.name] = {});
+    const old = mine[e.k];
+    // Yang lebih baru menang: perangkat yang tertinggal tidak boleh menimpa posisi terbaru
+    if (!old || e.at >= old.at) {
+      mine[e.k] = e;
+      const keys = Object.keys(mine);
+      if (keys.length > PROGRESS_MAX) {
+        keys.sort((a, c) => mine[a].at - mine[c].at).slice(0, keys.length - PROGRESS_MAX).forEach((k) => delete mine[k]);
+      }
+      saveProgressSoon();
+    }
+    return send(res, 204);
+  }
   if (p === '/api/presence' && method === 'GET') {
     needAdmin();
     const now = Date.now(), out = [];
@@ -2968,6 +3031,11 @@ if (process.argv[2]) {
       else res.end();
     });
   }).listen(PORT, HOST, () => console.log(`ZanTV API jalan di http://${HOST}:${PORT} (data: ${DATA_DIR})`));
+  // Saat service di-restart, tulis dulu memori tontonan yang masih menunggu di RAM
+  ['SIGTERM', 'SIGINT'].forEach((sig) => process.on(sig, () => {
+    if (progressTimer) { clearTimeout(progressTimer); flushProgress(); }
+    process.exit(0);
+  }));
   pruneLog();
   setInterval(pruneLog, 6 * 3600 * 1000).unref();
   setInterval(() => {
