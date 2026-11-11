@@ -1916,7 +1916,13 @@ function showResumeChip(sec) {
   label.textContent = 'Lanjut dari ' + formatVodTime(sec);
   chip.hidden = false;
   clearTimeout(resumeChipTimer);
-  resumeChipTimer = setTimeout(hideResumeChip, 9000);
+  // Selama film masih memuat (belum bisa diputar), chip tetap tampil supaya tombol "Dari awal"
+  // selalu bisa dipakai sebagai jalan keluar kalau posisi lanjut-nonton lambat dimuat.
+  var waitHide = function () {
+    if (!chip.hidden && el.video.readyState < 3) { resumeChipTimer = setTimeout(waitHide, 3000); return; }
+    hideResumeChip();
+  };
+  resumeChipTimer = setTimeout(waitHide, 9000);
 }
 (function () {
   var btn = document.getElementById('vodResumeRestartBtn');
@@ -1992,7 +1998,7 @@ function fail(info, token) {
   el.msgTitle.textContent = x.title;
   var streamPath = E.viaProxy ? 'Relay VPS' : 'Direct CDN';
   el.msgBody.innerHTML = esc(x.body) + (detailSuffix && !x.body.includes('[HLS:') ? (' ' + esc(detailSuffix)) : '') + (lock ? ' Channel ini sudah disembunyikan dari daftar.' : '') +
-    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.52 · Token #' + E.token + '</small>';
+    '<br><small style="display:inline-block;margin-top:8px;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.08);opacity:0.8;">Jalur: ' + esc(streamPath) + ' · Client: v1.7.53 · Token #' + E.token + '</small>';
   el.msg.hidden = false;
   el.stage.classList.add('has-msg');
   var isVodOrMovie = !!(S.playing && (S.playing.isVod || S.playing.isMovie));

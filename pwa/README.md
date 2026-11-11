@@ -65,3 +65,6 @@ Tiga hal yang harus dipenuhi agar jalan di web: HTTP 200, ada header
 - Posisi terakhir film, episode series, dan short drama disimpan otomatis (`zan-resume.js`): di perangkat (localStorage) dan di akun (`/api/progress`, berkas `progress.json` di folder data server), jadi lanjut nonton juga berlaku antar laptop dan HP.
 - Film dianggap tamat di 5% terakhir (maksimal 5 menit) dan hilang dari "Lanjut Nonton". Series otomatis membuka episode berikutnya.
 - Volume (0-100%) diingat per perangkat. Di iPhone/iPad volume tetap lewat tombol fisik karena Safari tidak mengizinkan halaman web mengaturnya.
+
+## Berkas film MP4 lewat relay (v1.7.53)
+- `/api/stream` sekarang meneruskan header `Range` untuk berkas film utuh (`.mp4`, `.mkv`, `.webm`, dll.) dan tidak lagi memutus koneksi paralelnya. Tanpa ini browser tidak bisa lompat menit di film MP4 (MovieBox): geser menit dan lanjut nonton hanya berputar.

@@ -1775,13 +1775,18 @@ async function handle(req, res) {
     const isTsLike = !isSegReq && !isM3u8Query && isDirectStreamUrl(rawU);
     const isStalker = /\/play\/live\.php\b/i.test(rawU);
     const cleanRawPath = rawU.split(/[?#]/)[0];
+    // Berkas film utuh (MP4 dkk, mis. dari MovieBox): BUKAN siaran TS. Browser memutarnya dengan permintaan
+    // Range (bytes=...) untuk lompat menit, dan sering membuka lebih dari satu koneksi sekaligus.
+    // Sebelumnya berkas ini ikut aturan TS: Range dibuang dan koneksi lama diputus, sehingga geser menit /
+    // lanjut nonton harus mengunduh film dari awal dan player hanya berputar.
+    const isSeekableFile = !isSegReq && !q && !isStalker && /\.(mp4|m4v|mov|mkv|webm|mp3|aac|m4a)$/i.test(cleanRawPath);
 
     // Cegah multi-connect pada server Stalker/MAC & Xtream Codes (max_connections: 1):
     // Putus koneksi lama pada MAC / akun Xtream yang sama sebelum buka yang baru (JANGAN terapkan pada segmen HLS seg=1!)
     const macMatch = /[?&]mac=([0-9a-fA-F:%]+)/.exec(rawU);
     const xtreamMatch = /\/(?:live|movie|series)\/([^/?#]+)\/([^/?#]+)\/(\d+)/i.exec(cleanRawPath) ||
                         /^https?:\/\/[^/]+\/([^/?#]+)\/([^/?#]+)\/(\d+)$/i.exec(cleanRawPath);
-    const lockKey = (!isSegReq && (isTsLike || (q && forceTranscode) || xtreamMatch))
+    const lockKey = (!isSegReq && ((isTsLike && !isSeekableFile) || (q && forceTranscode) || xtreamMatch))
       ? (macMatch
           ? 'mac:' + decodeURIComponent(macMatch[1]).toLowerCase()
           : (xtreamMatch
@@ -1907,7 +1912,7 @@ async function handle(req, res) {
       } else if (org) {
         reqHeaders['Origin'] = org;
       }
-      if (req.headers['range'] && !isTsLike && !q) reqHeaders['Range'] = req.headers['range'];
+      if (req.headers['range'] && (!isTsLike || isSeekableFile) && !q) reqHeaders['Range'] = req.headers['range'];
 
       const cookies = [];
       try {
