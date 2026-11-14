@@ -40,4 +40,4 @@ sleep 1
 systemctl start zantv-api 2>/dev/null || systemctl restart zantv-api 2>/dev/null || true
 systemctl reload nginx 2>/dev/null || true
 
-echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.54 sudah aktif."
+echo "✅ [ZanTV] Selesai! Versi terbaru v1.7.55 sudah aktif."

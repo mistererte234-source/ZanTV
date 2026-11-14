@@ -1220,7 +1220,7 @@ async function handle(req, res) {
     if (!itemUrl) return send(res, 400, { error: 'Parameter url diperlukan' });
     const cacheKey = `mov:stream:${itemUrl}:${tab}`;
     const cached = getVodCache(cacheKey);
-    if (cached) {
+    if (cached && cached.kind !== 'iframe') {
       console.log('[Movie API] CACHE HIT: tab=' + tab + ' url=' + clip(itemUrl, 70));
       return send(res, 200, cached);
     }
@@ -1228,7 +1228,7 @@ async function handle(req, res) {
     try {
       console.log('[Movie API] Extracting: tab=' + tab + ' url=' + clip(itemUrl, 70));
       const data = await movieProvider.extractStream(itemUrl, tab);
-      if (data && data.streamUrl) {
+      if (data && data.streamUrl && data.kind !== 'iframe') {
         console.log('[Movie API] Extracted SUCCESS: kind=' + data.kind + ' url=' + clip(data.streamUrl, 80));
         setVodCache(cacheKey, data, 2 * 3600 * 1000);
       }

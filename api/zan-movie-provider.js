@@ -621,11 +621,150 @@ async function klikxxiGetDetail(movieUrl) {
   };
 }
 
+function unpackDeanEdwards(html) {
+  try {
+    const m = /eval\(function\(p,a,c,k,e,d\)\{[\s\S]*?\}\('([\s\S]*?)',(\d+),(\d+),'([\s\S]*?)'\.split\('\|'\)/i.exec(html);
+    if (!m) return '';
+    let p = m[1];
+    const a = parseInt(m[2], 10);
+    let c = parseInt(m[3], 10);
+    const k = m[4].split('|');
+    while (c--) {
+      if (k[c]) {
+        p = p.replace(new RegExp('\\b' + c.toString(a) + '\\b', 'g'), k[c]);
+      }
+    }
+    return p;
+  } catch (e) {
+    return '';
+  }
+}
+
+async function tryExtractFromEmbedUrl(iframeSrc, refererUrl) {
+  if (!iframeSrc) return null;
+  if (iframeSrc.startsWith('//')) iframeSrc = 'https:' + iframeSrc;
+
+  // 1) VOE / shannoncoldalready / /e/ extractor
+  if (iframeSrc.includes('voe.sx') || iframeSrc.includes('shannoncoldalready') || iframeSrc.includes('cloudwindow') || iframeSrc.includes('voe-network') || iframeSrc.includes('yugotehe')) {
+    try {
+      let voeUrl = iframeSrc.replace(/^https?:\/\/voe\.sx\/e\//i, 'https://shannoncoldalready.com/e/');
+      const realVoeRes = await fetch(voeUrl, {
+        headers: { 'User-Agent': USER_AGENT, 'Referer': 'https://voe.sx/' },
+        signal: AbortSignal.timeout(6000)
+      });
+      const realVoeHtml = await realVoeRes.text();
+      const p8Match = /<script type="application\/json">\["([^"]+)"\]<\/script>/i.exec(realVoeHtml);
+      if (p8Match) {
+        const dec = decryptVoeF7(p8Match[1]);
+        if (dec && dec.source) {
+          return {
+            streamUrl: dec.source,
+            mp4Url: dec.direct_access_url || null,
+            kind: 'hls',
+            title: dec.title || '',
+            headers: {
+              'User-Agent': USER_AGENT,
+              'Origin': 'https://' + new URL(voeUrl).hostname,
+              'Referer': voeUrl
+            }
+          };
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2) Morencius / StreamHG / Filemoon / VidHide JWPlayer packed HLS extractor
+  if (iframeSrc.includes('morencius') || iframeSrc.includes('/embed/') || iframeSrc.includes('/e/')) {
+    try {
+      const emOrigin = new URL(iframeSrc).origin;
+      const emRes = await fetch(iframeSrc, {
+        headers: { 'User-Agent': USER_AGENT, 'Referer': refererUrl || (emOrigin + '/') },
+        signal: AbortSignal.timeout(6000)
+      });
+      const emHtml = await emRes.text();
+      const unpacked = unpackDeanEdwards(emHtml) || emHtml;
+      const hls4Match = /"hls4"\s*:\s*"([^"]+)"/i.exec(unpacked);
+      const hls2Match = /"hls2"\s*:\s*"([^"]+)"/i.exec(unpacked);
+      const fileMatch = /file\s*:\s*"(https?:\/\/[^"]+\.m3u8[^"]*)"/i.exec(unpacked);
+      let hlsUrl = (hls4Match && hls4Match[1]) || (hls2Match && hls2Match[1]) || (fileMatch && fileMatch[1]) || '';
+      if (hlsUrl) {
+        if (hlsUrl.startsWith('/')) hlsUrl = emOrigin + hlsUrl;
+        return {
+          streamUrl: hlsUrl,
+          mp4Url: null,
+          kind: 'hls',
+          server: 'HLS',
+          headers: {
+            'User-Agent': USER_AGENT,
+            'Origin': emOrigin,
+            'Referer': emOrigin + '/'
+          }
+        };
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
+async function mbFallbackBySlugOrTitle(movieUrl, tabId) {
+  try {
+    const u = new URL(movieUrl);
+    const segs = u.pathname.split('/').filter(Boolean).filter(s => s !== 'tv' && s !== 'eps' && s !== 'movie');
+    const rawSlug = segs[0] || '';
+    if (!rawSlug) return null;
+    const yearMatch = rawSlug.match(/\b(19\d{2}|20\d{2})\b/);
+    const targetYear = yearMatch ? yearMatch[1] : '';
+    const cleanQuery = rawSlug
+      .replace(/^nonton-(film-|series-)?/i, '')
+      .replace(/-sub-indo.*$/i, '')
+      .replace(/\b(19\d{2}|20\d{2})\b/g, '')
+      .replace(/-/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleanQuery) return null;
+
+    const sRes = await mbSearch(cleanQuery, 1);
+    const items = (sRes && sRes.items) || [];
+    if (!items.length) return null;
+
+    const qWords = cleanQuery.toLowerCase().split(/\s+/).filter(w => w.length >= 4 && !['petaka', 'gunung', 'film', 'the'].includes(w));
+    const allWords = cleanQuery.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+
+    let best = items.find(it => {
+      const t = String(it.title || '').toLowerCase();
+      return allWords.every(w => t.includes(w));
+    });
+    if (!best && qWords.length) {
+      best = items.find(it => {
+        const t = String(it.title || '').toLowerCase();
+        const yearOk = !targetYear || t.includes(targetYear);
+        return yearOk && qWords.some(w => t.includes(w));
+      });
+    }
+    if (!best) best = items[0];
+    if (!best || !best.url) return null;
+
+    let mbTab = '1080';
+    if (tabId === 'p2' || tabId === '720') mbTab = '720';
+    else if (tabId === '480') mbTab = '480';
+    return await mbExtractStream(best.url, mbTab);
+  } catch (e) {
+    return null;
+  }
+}
+
 async function klikxxiExtractStream(movieUrl, tabId) {
   if (!movieUrl.startsWith('http')) {
     try { movieUrl = Buffer.from(movieUrl, 'base64url').toString('utf8'); } catch (e) {}
   }
   tabId = tabId || 'p3';
+
+  // Jika user memilih Server 1 / Server 2 (Cadangan) atau MovieBox punya stream MP4 langsung yang bersih:
+  if (tabId === 'p1' || tabId === 'p2') {
+    const mbDirect = await mbFallbackBySlugOrTitle(movieUrl, tabId);
+    if (mbDirect && mbDirect.streamUrl) return mbDirect;
+  }
 
   let postId = null;
   let baseUrl = activeMirror;
@@ -636,15 +775,21 @@ async function klikxxiExtractStream(movieUrl, tabId) {
     postId = cached.postId;
     baseUrl = cached.baseUrl;
   } else {
-    const fetched = await fetchFromMirrors(movieUrl);
-    dHtml = fetched.html;
-    baseUrl = fetched.baseUrl;
-    const postIdMatch = /id="muvipro_player_content_id"[^>]*data-id="(\d+)"/i.exec(dHtml);
-    postId = postIdMatch ? postIdMatch[1] : null;
-    if (postId) postIdCache.set(movieUrl, { postId, baseUrl, ts: Date.now() });
+    try {
+      const fetched = await fetchFromMirrors(movieUrl);
+      dHtml = fetched.html;
+      baseUrl = fetched.baseUrl;
+      const postIdMatch = /id="muvipro_player_content_id"[^>]*data-id="(\d+)"/i.exec(dHtml);
+      postId = postIdMatch ? postIdMatch[1] : null;
+      if (postId) postIdCache.set(movieUrl, { postId, baseUrl, ts: Date.now() });
+    } catch (err) {
+      const mbRescue = await mbFallbackBySlugOrTitle(movieUrl, tabId);
+      if (mbRescue && mbRescue.streamUrl) return mbRescue;
+      throw err;
+    }
   }
 
-  let iframeSrc = null;
+  const candidateIframes = [];
   const tabsToTry = ['p3', tabId, 'p1', 'p2', 'p4'].filter((v, i, a) => a.indexOf(v) === i);
 
   if (postId) {
@@ -670,9 +815,8 @@ async function klikxxiExtractStream(movieUrl, tabId) {
         const ifm = /<iframe[^>]+src="([^"]+)"/i.exec(ajaxHtml);
         if (ifm && ifm[1]) {
           const candidate = ifm[1];
-          if (!iframeSrc) iframeSrc = candidate;
-          if (candidate.includes('voe.sx') || candidate.includes('shannoncoldalready') || candidate.includes('cloudwindow') || candidate.includes('voe-network') || candidate.includes('yugotehe')) {
-            iframeSrc = candidate;
+          if (!candidateIframes.includes(candidate)) candidateIframes.push(candidate);
+          if (candidate.includes('voe.sx') || candidate.includes('shannoncoldalready') || candidate.includes('morencius')) {
             break;
           }
         }
@@ -680,45 +824,49 @@ async function klikxxiExtractStream(movieUrl, tabId) {
     }
   }
 
-  if (!iframeSrc && dHtml) {
+  if (dHtml) {
     const directIfm = /<div[^>]*class="[^"]*gmr-embed-responsive[^"]*"[^>]*>[\s\S]*?<iframe[^>]+src="([^"]+)"/i.exec(dHtml);
-    if (directIfm) iframeSrc = directIfm[1];
+    if (directIfm && directIfm[1] && !candidateIframes.includes(directIfm[1])) {
+      candidateIframes.push(directIfm[1]);
+    }
   }
 
+  // Untuk situs NGEFILM21 (new31/new39.ngefilm.site) yang memakai ?player=3 (morencius HLS) & ?player=2
+  if (!postId) {
+    const cleanBaseMovieUrl = movieUrl.split('?')[0];
+    const playerNums = tabId === 'p2' ? [2, 3] : [3, 2];
+    for (const pNum of playerNums) {
+      try {
+        const pFetched = await fetchFromMirrors(`${cleanBaseMovieUrl}?player=${pNum}`, {}, 5000);
+        const pIfm = /<div[^>]*class="[^"]*gmr-embed-responsive[^"]*"[^>]*>[\s\S]*?<iframe[^>]+src="([^"]+)"/i.exec(pFetched.html);
+        if (pIfm && pIfm[1] && !candidateIframes.includes(pIfm[1])) {
+          // Prioritaskan morencius / voe di urutan paling depan
+          if (pIfm[1].includes('morencius') || pIfm[1].includes('voe')) {
+            candidateIframes.unshift(pIfm[1]);
+          } else {
+            candidateIframes.push(pIfm[1]);
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  for (const cand of candidateIframes) {
+    const extracted = await tryExtractFromEmbedUrl(cand, baseUrl + '/');
+    if (extracted && extracted.streamUrl) {
+      return extracted;
+    }
+  }
+
+  // Cross-Engine Rescue ke MovieBox BFF (Direct 1080p MP4 + Sub Indo) sebelum menyerah ke iframe!
+  const mbFallback = await mbFallbackBySlugOrTitle(movieUrl, tabId);
+  if (mbFallback && mbFallback.streamUrl) {
+    return mbFallback;
+  }
+
+  const iframeSrc = candidateIframes[0] || null;
   if (!iframeSrc) {
     throw new Error('Video stream player not found for this title');
-  }
-
-  if (iframeSrc.includes('voe.sx') || iframeSrc.includes('shannoncoldalready') || iframeSrc.includes('/e/')) {
-    try {
-      // 1-Hop Turbo Bypass: langsung tembak edge shannoncoldalready.com jika berasal dari voe.sx/e/CODE
-      let voeUrl = iframeSrc.replace(/^https?:\/\/voe\.sx\/e\//i, 'https://shannoncoldalready.com/e/');
-      const realVoeRes = await fetch(voeUrl, {
-        headers: {
-          'User-Agent': USER_AGENT,
-          'Referer': 'https://voe.sx/'
-        },
-        signal: AbortSignal.timeout(6000)
-      });
-      const realVoeHtml = await realVoeRes.text();
-      const p8Match = /<script type="application\/json">\["([^"]+)"\]<\/script>/i.exec(realVoeHtml);
-      if (p8Match) {
-        const dec = decryptVoeF7(p8Match[1]);
-        if (dec && dec.source) {
-          return {
-            streamUrl: dec.source,
-            mp4Url: dec.direct_access_url || null,
-            kind: 'hls',
-            title: dec.title || '',
-            headers: {
-              'User-Agent': USER_AGENT,
-              'Origin': 'https://' + new URL(voeUrl).hostname,
-              'Referer': voeUrl
-            }
-          };
-        }
-      }
-    } catch (e) {}
   }
 
   return {

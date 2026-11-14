@@ -673,9 +673,10 @@
 
     var streamRes = await apiGet('stream', { url: targetUrl, tab: M.selectedServer });
 
-    if (!streamRes || !streamRes.streamUrl) {
+    if (!streamRes || !streamRes.streamUrl || streamRes.kind === 'iframe') {
       var altTab = (M.selectedServer === '1080') ? '720' : ((M.selectedServer === 'p3') ? 'p1' : '1080');
-      streamRes = await apiGet('stream', { url: targetUrl, tab: altTab });
+      var altRes = await apiGet('stream', { url: targetUrl, tab: altTab });
+      if (altRes && altRes.streamUrl) streamRes = altRes;
     }
 
     if (el.movieSheetPlayBtn) el.movieSheetPlayBtn.disabled = false;
