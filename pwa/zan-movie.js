@@ -369,14 +369,39 @@
   }
 
   /* Series: buka di episode yang terakhir ditonton; kalau episode itu sudah tamat, lompat ke episode berikutnya */
-  function pickEpisodeFromMemory(episodes) {
+  function pickEpisodeFromMemory(episodes, resumeEntry) {
     var R = window.ZanResume;
     if (!R || !episodes || !episodes.length) return 0;
     var last = R.latestOf(episodes.map(function (ep) { return resumeKey(ep.url); }));
-    if (!last) return 0;
-    var idx = 0;
-    for (var i = 0; i < episodes.length; i++) { if (resumeKey(episodes[i].url) === last.k) { idx = i; break; } }
-    var finished = !!last.fin || (!last.gone && R.isDone(last.t, last.d));
+    var idx = -1;
+    if (last) {
+      for (var i = 0; i < episodes.length; i++) {
+        if (resumeKey(episodes[i].url) === last.k) { idx = i; break; }
+      }
+    }
+    var fallback = resumeEntry || (M.currentMovie && R.list('movie').filter(function (x) { return x.movieUrl === M.currentMovie.url; })[0]) || null;
+    if (idx < 0 && fallback) {
+      var targetTitle = String(fallback.epTitle || '').trim().toLowerCase();
+      var targetNumMatch = targetTitle.match(/(\d+)/) || String(fallback.k || '').match(/[?&]ep=(\d+)/i);
+      var targetNum = targetNumMatch ? parseInt(targetNumMatch[1], 10) : NaN;
+      for (var j = 0; j < episodes.length; j++) {
+        var epT = String(episodes[j].title || '').trim().toLowerCase();
+        var epNumM = epT.match(/(\d+)/) || String(episodes[j].url || '').match(/[?&]ep=(\d+)/i);
+        var epN = epNumM ? parseInt(epNumM[1], 10) : (j + 1);
+        if ((targetTitle && epT === targetTitle) || (!isNaN(targetNum) && epN === targetNum)) {
+          idx = j;
+          last = fallback;
+          var newKey = resumeKey(episodes[j].url);
+          if (newKey && fallback.k !== newKey && fallback.t > 0 && typeof R.save === 'function') {
+            R.save(newKey, fallback.t, fallback.d, fallback);
+          }
+          break;
+        }
+      }
+    }
+    if (idx < 0) return 0;
+    var ref = last || fallback;
+    var finished = ref && (!!ref.fin || (!ref.gone && R.isDone(ref.t, ref.d)));
     if (finished && idx + 1 < episodes.length) idx++;
     return idx;
   }
@@ -445,7 +470,7 @@
     openMovieDetail(known || {
       url: e.movieUrl, title: e.movieTitle || e.title, poster: e.poster,
       isSeries: !!e.isSeries, provider: e.provider || '', quality: e.quality || ''
-    }, { autoPlay: true });
+    }, { autoPlay: true, resumeEntry: e });
   }
 
   /* ---------------- RENDER KARTU FILM ---------------- */
@@ -525,7 +550,27 @@
     // Lembar sudah dipakai film lain selagi menunggu jawaban server: jangan timpa
     if (M.currentMovie !== item) return;
     if (!detail) {
-      if (el.movieSheetDesc) el.movieSheetDesc.textContent = 'Siap diputar langsung. Klik tombol Putar di bawah.';
+      var resEntry = opts.resumeEntry || (window.ZanResume ? window.ZanResume.list('movie').filter(function (x) { return x.movieUrl === item.url; })[0] : null);
+      if (resEntry && (item.isSeries || resEntry.isSeries)) {
+        var savedEpUrl = resEntry.k ? String(resEntry.k).replace(/^m:/, '') : item.url;
+        var savedEpTitle = resEntry.epTitle || 'Episode Terakhir';
+        M.selectedEpisode = { url: savedEpUrl, title: savedEpTitle };
+        M.selectedEpisodeIdx = 0;
+        M.currentDetail = {
+          title: item.title || resEntry.movieTitle || resEntry.title || 'Series',
+          url: item.url,
+          poster: item.poster || resEntry.poster || '',
+          isSeries: true,
+          episodes: [M.selectedEpisode]
+        };
+        if (resEntry.server) M.selectedServer = resEntry.server;
+        if (el.movieEpSection) el.movieEpSection.hidden = false;
+        if (el.movieEpCount) el.movieEpCount.textContent = savedEpTitle;
+        if (el.movieEpList) {
+          el.movieEpList.innerHTML = '<button type="button" class="movie-ep-btn is-active" data-idx="0">' + escapeHtml(savedEpTitle) + '</button>';
+        }
+      }
+      if (el.movieSheetDesc) el.movieSheetDesc.textContent = 'Siap diputar langsung dari posisi terakhir. Klik tombol Putar di bawah.';
       if (el.movieSheetPlayBtn) el.movieSheetPlayBtn.disabled = false;
       refreshSheetResume();
       if (opts.autoPlay) playCurrentSelection();
@@ -554,7 +599,9 @@
       ? [{ id: '1080', name: '🚀 Server 1080p (Full HD)' }, { id: '720', name: '⚡ Server 720p (HD)' }, { id: '480', name: '📱 Server 480p' }]
       : [{ id: 'p3', name: '🚀 Server 3 (VOE Clean)' }, { id: 'p1', name: 'Server 1' }]);
     var servers = rawServers.slice();
-    M.selectedServer = servers[0] ? servers[0].id : (isMb ? '1080' : 'p3');
+    M.selectedServer = (opts.resumeEntry && opts.resumeEntry.server && servers.some(function (s) { return s.id === opts.resumeEntry.server; }))
+      ? opts.resumeEntry.server
+      : (servers[0] ? servers[0].id : (isMb ? '1080' : 'p3'));
 
     if (el.movieSheetServers) {
       el.movieSheetServers.innerHTML = servers.map(function (s) {
@@ -576,7 +623,7 @@
         }).join('');
       }
 
-      selectEpisode(pickEpisodeFromMemory(detail.episodes));
+      selectEpisode(pickEpisodeFromMemory(detail.episodes, opts.resumeEntry));
     } else {
       if (el.movieEpSection) el.movieEpSection.hidden = true;
     }

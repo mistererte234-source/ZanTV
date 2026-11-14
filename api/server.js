@@ -1107,6 +1107,22 @@ async function handle(req, res) {
     return send(res, 200, { categories: movieProvider.CATEGORIES, movieEnabled: cfg.movieEnabled, engine: cfg.movieEngine });
   }
 
+  if ((p === '/api/movie/providers' || p === '/api/movie/admin/mirror') && method === 'GET') {
+    const info = (movieProvider && movieProvider.getMirrors)
+      ? movieProvider.getMirrors()
+      : { active: 'https://klikxxi.shop', engine: 'moviebox', mirrors: ['https://klikxxi.shop'] };
+    const cfg = getAppConfig();
+    return send(res, 200, {
+      ok: true,
+      active: info.active || cfg.movieMirror,
+      engine: cfg.movieEngine,
+      mirrors: info.mirrors || ['https://klikxxi.shop'],
+      movieEnabled: cfg.movieEnabled,
+      watermarkLogo: cfg.watermarkLogo,
+      watermarkText: cfg.watermarkText
+    });
+  }
+
   if (p === '/api/movie/subtitle' && method === 'GET') {
     const subUrl = (url.searchParams.get('u') || url.searchParams.get('url') || '').trim();
     const fmt = (url.searchParams.get('format') || 'vtt').toLowerCase();
