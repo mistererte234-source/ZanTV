@@ -136,6 +136,30 @@
   }
 
   /* ---------------- GLOBAL CONFIG: WATERMARK & BIOSKOP TOGGLE ---------------- */
+  var LOCAL_CFG_KEY = 'zantv_app_config_v1';
+
+  function loadLocalAppConfig() {
+    try {
+      var raw = localStorage.getItem(LOCAL_CFG_KEY);
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (e) {}
+    return {};
+  }
+
+  function saveLocalAppConfig(patch) {
+    try {
+      var cur = loadLocalAppConfig();
+      var next = Object.assign({}, cur, patch || {});
+      localStorage.setItem(LOCAL_CFG_KEY, JSON.stringify(next));
+      return next;
+    } catch (e) {
+      return patch || {};
+    }
+  }
+
   function formatBrandHtml(txt) {
     var clean = String(txt || 'ZanTV').trim() || 'ZanTV';
     if (/tv$/i.test(clean) && clean.length > 2) {
@@ -147,25 +171,32 @@
   function applyAppConfig(cfg) {
     if (!cfg || typeof cfg !== 'object') return;
     M.appConfig = Object.assign({}, M.appConfig, cfg);
+    saveLocalAppConfig({
+      movieEnabled: M.appConfig.movieEnabled !== false,
+      movieEngine: M.appConfig.movieEngine || 'moviebox',
+      movieMirror: M.appConfig.movieMirror || 'https://klikxxi.shop',
+      watermarkLogo: M.appConfig.watermarkLogo || '',
+      watermarkText: M.appConfig.watermarkText || 'ZanTV'
+    });
 
     // 1. Update Watermark Logo & Brand Text di layar player
     var wmBox = document.getElementById('stageWatermark');
     if (wmBox) {
       var wmImg = wmBox.querySelector('.wm-icon');
       var wmBrand = wmBox.querySelector('.wm-brand');
-      var logoSrc = (cfg.watermarkLogo && String(cfg.watermarkLogo).trim()) ? String(cfg.watermarkLogo).trim() : 'icons/icon-192.png';
+      var logoSrc = (M.appConfig.watermarkLogo && String(M.appConfig.watermarkLogo).trim()) ? String(M.appConfig.watermarkLogo).trim() : 'icons/icon-192.png';
       if (wmImg) {
         wmImg.src = logoSrc;
         wmImg.onerror = function () { this.src = 'icons/icon-192.png'; };
       }
       if (wmBrand) {
-        wmBrand.innerHTML = formatBrandHtml(cfg.watermarkText || 'ZanTV');
+        wmBrand.innerHTML = formatBrandHtml(M.appConfig.watermarkText || 'ZanTV');
       }
     }
 
     // 2. Toggle Aktif / Nonaktif Tab Bioskop 21
     var segMovieBtn = document.getElementById('segMovieBtn');
-    var enabled = cfg.movieEnabled !== false;
+    var enabled = M.appConfig.movieEnabled !== false;
     if (segMovieBtn) {
       segMovieBtn.hidden = !enabled;
       segMovieBtn.style.display = enabled ? '' : 'none';
@@ -177,6 +208,10 @@
   }
 
   async function syncGlobalConfig() {
+    var localCfg = loadLocalAppConfig();
+    if (localCfg && Object.keys(localCfg).length) {
+      applyAppConfig(localCfg);
+    }
     try {
       var res = await fetch('/api/config', { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
       if (res.ok) {
@@ -900,6 +935,44 @@
   }
 
   /* ---------------- ADMIN: KELOLA BIOSKOP 21, ENGINE & WATERMARK LOGO ---------------- */
+  async function saveAdminConfig(payload, prevInfo) {
+    payload = payload || {};
+    var localCur = Object.assign({}, loadLocalAppConfig(), M.appConfig || {}, prevInfo || {});
+    var merged = {
+      ok: true,
+      active: payload.url && /^https?:\/\//i.test(payload.url) ? payload.url : (localCur.active || localCur.movieMirror || 'https://klikxxi.shop'),
+      engine: payload.engine || localCur.engine || localCur.movieEngine || 'moviebox',
+      movieEnabled: typeof payload.movieEnabled === 'boolean' ? payload.movieEnabled : (localCur.movieEnabled !== false),
+      watermarkLogo: typeof payload.watermarkLogo === 'string' ? payload.watermarkLogo : (localCur.watermarkLogo || ''),
+      watermarkText: typeof payload.watermarkText === 'string' ? payload.watermarkText : (localCur.watermarkText || 'ZanTV'),
+      mirrors: (prevInfo && prevInfo.mirrors) || ['https://klikxxi.shop', 'https://filmlokal.me', 'https://ww11.pencurimovie.sbs']
+    };
+    merged.config = {
+      movieEnabled: merged.movieEnabled,
+      movieEngine: merged.engine,
+      movieMirror: merged.active,
+      watermarkLogo: merged.watermarkLogo,
+      watermarkText: merged.watermarkText
+    };
+    applyAppConfig(merged.config);
+
+    try {
+      var res = await apiPost('admin/mirror', payload);
+      if (res && res.ok) {
+        if (res.config) applyAppConfig(res.config);
+        return Object.assign({}, merged, res);
+      }
+    } catch (err) {
+      // Fallback ke endpoint legacy /api/movie/admin/providers jika server lama masih jalan
+      if (payload.url && /^https?:\/\//i.test(payload.url)) {
+        try {
+          await apiPost('admin/providers', { providerId: 'klikxxi', mirror: payload.url });
+        } catch (e2) {}
+      }
+    }
+    return merged;
+  }
+
   async function openMovieAdminDialog() {
     if (!el.movieAdminDialog) return;
 
@@ -913,15 +986,54 @@
       el.movieAdminDialog.setAttribute('open', '');
     }
 
+    var localCfg = Object.assign({}, loadLocalAppConfig(), M.appConfig || {});
+    var fallbackInfo = {
+      ok: true,
+      active: localCfg.movieMirror || 'https://klikxxi.shop',
+      engine: localCfg.movieEngine || 'moviebox',
+      movieEnabled: localCfg.movieEnabled !== false,
+      watermarkLogo: localCfg.watermarkLogo || '',
+      watermarkText: localCfg.watermarkText || 'ZanTV',
+      mirrors: ['https://klikxxi.shop', 'https://filmlokal.me', 'https://ww11.pencurimovie.sbs']
+    };
+
     try {
       var info = await apiGet('admin/mirror');
-      if (!info || !info.ok) throw new Error((info && info.error) || 'Gagal mengambil data konfigurasi');
-      renderAdminMirrorUI(info);
-    } catch (err) {
-      if (el.movieAdminList) {
-        el.movieAdminList.innerHTML = '<div style="padding:18px;text-align:center;color:#ef4444">⚠️ ' + escapeHtml(err.message || 'Gagal memuat panel Admin') + '</div>';
+      if (info && info.ok) {
+        renderAdminMirrorUI(Object.assign({}, fallbackInfo, info));
+        return;
       }
-    }
+    } catch (e) {}
+
+    // Fallback ke /api/config + /api/movie/providers jika endpoint admin/mirror belum aktif
+    try {
+      var cfgRes = await fetch('/api/config', { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
+      if (cfgRes.ok) {
+        var cfgData = await cfgRes.json();
+        if (cfgData && cfgData.config) {
+          fallbackInfo.movieEnabled = cfgData.config.movieEnabled !== false;
+          fallbackInfo.engine = cfgData.config.movieEngine || fallbackInfo.engine;
+          fallbackInfo.active = cfgData.config.movieMirror || fallbackInfo.active;
+          fallbackInfo.watermarkLogo = cfgData.config.watermarkLogo || fallbackInfo.watermarkLogo;
+          fallbackInfo.watermarkText = cfgData.config.watermarkText || fallbackInfo.watermarkText;
+        }
+      }
+    } catch (e) {}
+
+    try {
+      var prov = await apiGet('providers');
+      if (prov && Array.isArray(prov.providers) && prov.providers.length) {
+        var p0 = prov.providers[0];
+        if (p0.activeMirror && !p0.activeMirror.includes('ngefilm') && !p0.activeMirror.includes('idmxl')) {
+          fallbackInfo.active = p0.activeMirror;
+        }
+        if (Array.isArray(p0.mirrors)) {
+          fallbackInfo.mirrors = p0.mirrors;
+        }
+      }
+    } catch (e) {}
+
+    renderAdminMirrorUI(fallbackInfo);
   }
 
   function renderAdminMirrorUI(info) {
@@ -1047,8 +1159,7 @@
         try {
           toggleBioskopBtn.disabled = true;
           toggleBioskopBtn.textContent = 'Menyimpan...';
-          var res = await apiPost('admin/mirror', { movieEnabled: nextState });
-          applyAppConfig(res.config || { movieEnabled: res.movieEnabled });
+          var res = await saveAdminConfig({ movieEnabled: nextState }, info);
           showToast(nextState ? '✅ Fitur Bioskop 21 diaktifkan!' : '⏸ Fitur Bioskop 21 dinonaktifkan.');
           renderAdminMirrorUI(Object.assign({}, info, res));
         } catch (err) {
@@ -1099,8 +1210,7 @@
         if (wmTextInput) wmTextInput.value = 'ZanTV';
         updateWmPreview();
         try {
-          var res = await apiPost('admin/mirror', { watermarkLogo: '', watermarkText: 'ZanTV' });
-          applyAppConfig(res.config || { watermarkLogo: '', watermarkText: 'ZanTV' });
+          var res = await saveAdminConfig({ watermarkLogo: '', watermarkText: 'ZanTV' }, info);
           showToast('🔄 Watermark dikembalikan ke bawaan ZanTV');
           renderAdminMirrorUI(Object.assign({}, info, res));
         } catch (err) {
@@ -1116,8 +1226,7 @@
         try {
           wmSaveBtn.disabled = true;
           wmSaveBtn.textContent = 'Menyimpan...';
-          var res = await apiPost('admin/mirror', { watermarkLogo: newLogo, watermarkText: newText });
-          applyAppConfig(res.config || { watermarkLogo: res.watermarkLogo, watermarkText: res.watermarkText });
+          var res = await saveAdminConfig({ watermarkLogo: newLogo, watermarkText: newText }, info);
           showToast('✅ Watermark layar berhasil diperbarui!');
           renderAdminMirrorUI(Object.assign({}, info, res));
         } catch (err) {
@@ -1134,8 +1243,7 @@
 
     async function switchEngineTo(eng) {
       try {
-        var res = await apiPost('admin/mirror', { engine: eng });
-        applyAppConfig(res.config || { movieEngine: eng });
+        var res = await saveAdminConfig({ engine: eng }, info);
         showToast('🚀 Mesin Bioskop 21 dialihkan ke: ' + (eng === 'moviebox' ? 'MovieBox Official CDN' : 'KlikXXI CloudX'));
         renderAdminMirrorUI(Object.assign({}, info, res));
         M.page = 1;
@@ -1177,7 +1285,7 @@
         try {
           saveBtn.disabled = true;
           saveBtn.textContent = 'Menyimpan...';
-          var res = await apiPost('admin/mirror', { url: newMirror, engine: 'klikxxi' });
+          var res = await saveAdminConfig({ url: newMirror, engine: 'klikxxi' }, info);
           showToast('✅ Mirror KlikXXI disimpan & diaktifkan: ' + res.active);
           renderAdminMirrorUI(Object.assign({}, info, res));
           M.page = 1;
